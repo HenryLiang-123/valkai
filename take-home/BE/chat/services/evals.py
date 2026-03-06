@@ -1,6 +1,5 @@
 """Service layer for running evals and the harness comparison from the UI."""
 
-import asyncio
 import logging
 import re
 import subprocess
@@ -8,7 +7,6 @@ import sys
 from pathlib import Path
 
 from harness.run_comparison import run_comparison, SCRIPTED_TURNS, RECALL_TURNS, check_recall
-from agent.sdk_agent import run_conversation
 from agent.memory import MEMORY_STRATEGIES
 
 logger = logging.getLogger(__name__)
@@ -102,57 +100,71 @@ def run_tests(test_path: str = "evals/") -> dict:
 
 
 def run_agent_sdk_harness(strategies: list[str] | None = None) -> dict:
-    """Run the scripted conversation through the Agent SDK agent with memory tools.
+    """Run the scripted conversation through the normal chat endpoint with DB persistence.
 
-    Returns structured results with tool call info and recall checks.
+    Creates a real session per strategy, sends each scripted turn through
+    handle_send_message (which persists to the DB and reads from it), then
+    checks recall on turns 7 and 8.
     """
+    from chat.services.session import handle_create_session
+    from chat.services.message import handle_send_message
+
     if strategies is None:
         strategies = list(MEMORY_STRATEGIES.keys())
 
-    async def _run_all():
-        results = []
-        for name in strategies:
-            logger.info("[SDK harness] Starting strategy=%s", name)
-            conv = await run_conversation(name, SCRIPTED_TURNS)
-            # Extract responses and tool calls per turn
-            turns = []
-            for i, turn in enumerate(conv.turns):
-                logger.info("[SDK harness] strategy=%s turn=%d user=%r", name, i + 1, turn.user_message)
-                if turn.tool_calls:
-                    logger.info("[SDK harness] strategy=%s turn=%d tool_calls=%s", name, i + 1, turn.tool_calls)
-                logger.info("[SDK harness] strategy=%s turn=%d response=%r", name, i + 1, turn.response[:300])
-                turns.append({
-                    "turn": i + 1,
-                    "user": turn.user_message,
-                    "assistant": turn.response,
-                    "tool_calls": turn.tool_calls,
-                })
+    results = []
+    for name in strategies:
+        logger.info("[SDK harness] Starting strategy=%s", name)
 
-            # Check recall on turns 7 and 8 (indices 6 and 7)
-            t7_pass, t7_found = check_recall(conv.turns[6].response, RECALL_TURNS[6])
-            t8_pass, t8_found = check_recall(conv.turns[7].response, RECALL_TURNS[7])
-            logger.info(
-                "[SDK harness] strategy=%s recall: turn_7=%s turn_8=%s",
-                name,
-                "PASS" if t7_pass else f"FAIL (found: {t7_found})",
-                "PASS" if t8_pass else f"FAIL (found: {t8_found})",
-            )
+        session = handle_create_session(name)
+        session_id = session["id"]
 
-            results.append({
-                "strategy": name,
-                "recall": {
-                    "turn_7": {"passed": t7_pass, "expected": RECALL_TURNS[6], "found": t7_found},
-                    "turn_8": {"passed": t8_pass, "expected": RECALL_TURNS[7], "found": t8_found},
-                },
-                "turns": turns,
+        turns = []
+        for i, user_msg in enumerate(SCRIPTED_TURNS):
+            logger.info("[SDK harness] strategy=%s turn=%d user=%r", name, i + 1, user_msg)
+            result = handle_send_message(session_id, user_msg)
+
+            # Extract the assistant's chat_message text and any tool_use events
+            assistant_text = ""
+            tool_calls = []
+            for event in result["events"]:
+                if event["type"] == "chat_message":
+                    assistant_text = event.get("text", "")
+                elif event["type"] == "tool_use":
+                    tool_calls.append({
+                        "tool": event.get("tool_name", ""),
+                        "input": event.get("input", {}),
+                        "result": event.get("result"),
+                    })
+
+            logger.info("[SDK harness] strategy=%s turn=%d response=%r", name, i + 1, assistant_text[:300])
+            turns.append({
+                "turn": i + 1,
+                "user": user_msg,
+                "assistant": assistant_text,
+                "tool_calls": tool_calls,
             })
-            logger.info("[SDK harness] Finished strategy=%s", name)
-        return results
 
-    loop = asyncio.new_event_loop()
-    try:
-        results = loop.run_until_complete(_run_all())
-    finally:
-        loop.close()
+        # Check recall on turns 7 and 8 (indices 6 and 7)
+        t7_resp = turns[6]["assistant"]
+        t8_resp = turns[7]["assistant"]
+        t7_pass, t7_found = check_recall(t7_resp, RECALL_TURNS[6])
+        t8_pass, t8_found = check_recall(t8_resp, RECALL_TURNS[7])
+        logger.info(
+            "[SDK harness] strategy=%s recall: turn_7=%s turn_8=%s",
+            name,
+            "PASS" if t7_pass else f"FAIL (found: {t7_found})",
+            "PASS" if t8_pass else f"FAIL (found: {t8_found})",
+        )
+
+        results.append({
+            "strategy": name,
+            "recall": {
+                "turn_7": {"passed": t7_pass, "expected": RECALL_TURNS[6], "found": t7_found},
+                "turn_8": {"passed": t8_pass, "expected": RECALL_TURNS[7], "found": t8_found},
+            },
+            "turns": turns,
+        })
+        logger.info("[SDK harness] Finished strategy=%s", name)
 
     return {"type": "agent_sdk", "results": results}

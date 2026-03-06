@@ -40,3 +40,23 @@ class ChatMessage(models.Model):
 
     def __str__(self):
         return f"[{self.role}] {self.content[:50]}"
+
+
+EVAL_TYPE_CHOICES = [
+    ("harness", "Harness"),
+    ("agent_sdk", "Agent SDK"),
+    ("tests", "Tests"),
+]
+
+
+class EvalRun(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    eval_type = models.CharField(max_length=20, choices=EVAL_TYPE_CHOICES)
+    result = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.eval_type} — {self.created_at}"

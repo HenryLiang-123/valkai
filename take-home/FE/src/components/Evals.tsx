@@ -1,15 +1,40 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   runHarness,
   runAgentSdk,
   runTests,
+  fetchEvalRuns,
+  fetchEvalRun,
   type HarnessResult,
   type HarnessStrategyResult,
   type AgentSdkResult,
   type AgentSdkStrategyResult,
+  type AgentSdkToolCall,
   type TestsResult,
+  type EvalRunSummary,
+  type EvalRunResult,
 } from "../api";
 import styles from "./Evals.module.css";
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+const TYPE_LABELS: Record<string, string> = {
+  harness: "Harness",
+  agent_sdk: "Agent SDK",
+  tests: "Tests",
+};
+
+function formatTime(iso: string) {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 /* ------------------------------------------------------------------ */
 /*  Harness Results                                                    */
@@ -36,50 +61,53 @@ function HarnessResults({ data }: { data: HarnessResult }) {
           </thead>
           <tbody>
             {data.results.map((r) => (
-              <tr key={r.strategy}>
-                <td className={styles.strategyName}>
-                  {r.description || r.strategy}
-                </td>
-                <td
-                  className={
-                    r.recall.turn_7.passed ? styles.pass : styles.fail
-                  }
-                >
-                  {r.recall.turn_7.passed
-                    ? "PASS"
-                    : `FAIL (${r.recall.turn_7.found.join(", ") || "none"})`}
-                </td>
-                <td
-                  className={
-                    r.recall.turn_8.passed ? styles.pass : styles.fail
-                  }
-                >
-                  {r.recall.turn_8.passed
-                    ? "PASS"
-                    : `FAIL (${r.recall.turn_8.found.join(", ") || "none"})`}
-                </td>
-                <td>
-                  <button
-                    className={styles.expandBtn}
-                    onClick={() =>
-                      setExpanded(
-                        expanded === r.strategy ? null : r.strategy
-                      )
+              <>
+                <tr key={r.strategy}>
+                  <td className={styles.strategyName}>
+                    {r.description || r.strategy}
+                  </td>
+                  <td
+                    className={
+                      r.recall.turn_7.passed ? styles.pass : styles.fail
                     }
                   >
-                    {expanded === r.strategy ? "Hide" : "Details"}
-                  </button>
-                </td>
-              </tr>
+                    {r.recall.turn_7.passed
+                      ? "PASS"
+                      : `FAIL (${r.recall.turn_7.found.join(", ") || "none"})`}
+                  </td>
+                  <td
+                    className={
+                      r.recall.turn_8.passed ? styles.pass : styles.fail
+                    }
+                  >
+                    {r.recall.turn_8.passed
+                      ? "PASS"
+                      : `FAIL (${r.recall.turn_8.found.join(", ") || "none"})`}
+                  </td>
+                  <td>
+                    <button
+                      className={styles.expandBtn}
+                      onClick={() =>
+                        setExpanded(
+                          expanded === r.strategy ? null : r.strategy
+                        )
+                      }
+                    >
+                      {expanded === r.strategy ? "Hide" : "Details"}
+                    </button>
+                  </td>
+                </tr>
+                {expanded === r.strategy && (
+                  <tr key={`${r.strategy}-detail`}>
+                    <td colSpan={4} style={{ padding: 0 }}>
+                      <HarnessDetail result={r} />
+                    </td>
+                  </tr>
+                )}
+              </>
             ))}
           </tbody>
         </table>
-
-        {expanded && (
-          <HarnessDetail
-            result={data.results.find((r) => r.strategy === expanded)!}
-          />
-        )}
       </div>
     </div>
   );
@@ -129,48 +157,68 @@ function AgentSdkResults({ data }: { data: AgentSdkResult }) {
           </thead>
           <tbody>
             {data.results.map((r) => (
-              <tr key={r.strategy}>
-                <td className={styles.strategyName}>{r.strategy}</td>
-                <td
-                  className={
-                    r.recall.turn_7.passed ? styles.pass : styles.fail
-                  }
-                >
-                  {r.recall.turn_7.passed
-                    ? "PASS"
-                    : `FAIL (${r.recall.turn_7.found.join(", ") || "none"})`}
-                </td>
-                <td
-                  className={
-                    r.recall.turn_8.passed ? styles.pass : styles.fail
-                  }
-                >
-                  {r.recall.turn_8.passed
-                    ? "PASS"
-                    : `FAIL (${r.recall.turn_8.found.join(", ") || "none"})`}
-                </td>
-                <td>
-                  <button
-                    className={styles.expandBtn}
-                    onClick={() =>
-                      setExpanded(
-                        expanded === r.strategy ? null : r.strategy
-                      )
+              <>
+                <tr key={r.strategy}>
+                  <td className={styles.strategyName}>{r.strategy}</td>
+                  <td
+                    className={
+                      r.recall.turn_7.passed ? styles.pass : styles.fail
                     }
                   >
-                    {expanded === r.strategy ? "Hide" : "Details"}
-                  </button>
-                </td>
-              </tr>
+                    {r.recall.turn_7.passed
+                      ? "PASS"
+                      : `FAIL (${r.recall.turn_7.found.join(", ") || "none"})`}
+                  </td>
+                  <td
+                    className={
+                      r.recall.turn_8.passed ? styles.pass : styles.fail
+                    }
+                  >
+                    {r.recall.turn_8.passed
+                      ? "PASS"
+                      : `FAIL (${r.recall.turn_8.found.join(", ") || "none"})`}
+                  </td>
+                  <td>
+                    <button
+                      className={styles.expandBtn}
+                      onClick={() =>
+                        setExpanded(
+                          expanded === r.strategy ? null : r.strategy
+                        )
+                      }
+                    >
+                      {expanded === r.strategy ? "Hide" : "Details"}
+                    </button>
+                  </td>
+                </tr>
+                {expanded === r.strategy && (
+                  <tr key={`${r.strategy}-detail`}>
+                    <td colSpan={4} style={{ padding: 0 }}>
+                      <AgentSdkDetail result={r} />
+                    </td>
+                  </tr>
+                )}
+              </>
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
 
-        {expanded && (
-          <AgentSdkDetail
-            result={data.results.find((r) => r.strategy === expanded)!}
-          />
-        )}
+function ToolCallIndicator({ tc }: { tc: AgentSdkToolCall }) {
+  const inputStr =
+    typeof tc.input === "string"
+      ? tc.input
+      : Object.values(tc.input).join(", ") || "{}";
+
+  return (
+    <div className={styles.toolCallPanel}>
+      <div className={styles.toolCallHeader}>
+        <span className={styles.toolCallName}>{tc.tool}</span>
+        <span className={styles.toolCallSep}>&rarr;</span>
+        <span className={styles.toolCallQuery}>{inputStr}</span>
       </div>
     </div>
   );
@@ -190,19 +238,7 @@ function AgentSdkDetail({ result }: { result: AgentSdkStrategyResult }) {
           {t.tool_calls.length > 0 && (
             <div className={styles.toolCalls}>
               {t.tool_calls.map((tc, i) => (
-                <span key={i} className={styles.toolCallTag}>
-                  {tc.tool}
-                  {tc.input && (
-                    <>
-                      <span className={styles.toolCallArrow}>&rarr;</span>
-                      <span className={styles.toolCallInput}>
-                        {typeof tc.input === "string"
-                          ? tc.input
-                          : JSON.stringify(tc.input)}
-                      </span>
-                    </>
-                  )}
-                </span>
+                <ToolCallIndicator key={i} tc={tc} />
               ))}
             </div>
           )}
@@ -283,68 +319,98 @@ function TestResults({ data }: { data: TestsResult }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Result renderer (dispatches by type)                               */
+/* ------------------------------------------------------------------ */
+
+function ResultView({ data }: { data: EvalRunResult }) {
+  if (data.type === "harness") return <HarnessResults data={data as HarnessResult} />;
+  if (data.type === "agent_sdk") return <AgentSdkResults data={data as AgentSdkResult} />;
+  if (data.type === "tests") return <TestResults data={data as TestsResult} />;
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Run indicator                                                      */
+/* ------------------------------------------------------------------ */
+
+function RunIndicator({ data }: { data: EvalRunResult }) {
+  return (
+    <div className={styles.runIndicator}>
+      <span className={styles.runIndicatorLabel}>Run</span>
+      <span className={styles.runIndicatorId}>{data.run_id.slice(0, 8)}</span>
+      <span className={styles.runIndicatorTime}>{formatTime(data.created_at)}</span>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Main Evals Page                                                    */
 /* ------------------------------------------------------------------ */
 
 export default function Evals({ onBack }: { onBack: () => void }) {
-  const [harnessResult, setHarnessResult] = useState<HarnessResult | null>(
-    null
-  );
-  const [agentSdkResult, setAgentSdkResult] =
-    useState<AgentSdkResult | null>(null);
-  const [testsResult, setTestsResult] = useState<TestsResult | null>(null);
+  const [runs, setRuns] = useState<EvalRunSummary[]>([]);
+  const [activeResult, setActiveResult] = useState<EvalRunResult | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleRunHarness = async () => {
-    setLoading("Running harness comparison across memory strategies...");
-    setError(null);
-    setHarnessResult(null);
+  const refreshRuns = useCallback(async () => {
     try {
-      const result = await runHarness();
-      setHarnessResult(result);
+      const list = await fetchEvalRuns();
+      setRuns(list);
+    } catch {
+      /* silently ignore — runs list is supplementary */
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshRuns();
+  }, [refreshRuns]);
+
+  const loadRun = async (runId: string) => {
+    if (selectedRunId === runId) return;
+    setSelectedRunId(runId);
+    setError(null);
+    try {
+      const result = await fetchEvalRun(runId);
+      setActiveResult(result);
+    } catch {
+      setError("Failed to load eval run.");
+    }
+  };
+
+  const runAndShow = async (
+    label: string,
+    runner: () => Promise<EvalRunResult>
+  ) => {
+    setLoading(label);
+    setError(null);
+    setActiveResult(null);
+    setSelectedRunId(null);
+    try {
+      const result = await runner();
+      setActiveResult(result);
+      setSelectedRunId(result.run_id);
+      await refreshRuns();
     } catch (err) {
       setError(
-        `Harness failed: ${err instanceof Error ? err.message : "Unknown error"}`
+        `${label} failed: ${err instanceof Error ? err.message : "Unknown error"}`
       );
     } finally {
       setLoading(null);
     }
   };
 
-  const handleRunAgentSdk = async () => {
-    setLoading(
-      "Running Agent SDK comparison with memory tools..."
-    );
-    setError(null);
-    setAgentSdkResult(null);
-    try {
-      const result = await runAgentSdk();
-      setAgentSdkResult(result);
-    } catch (err) {
-      setError(
-        `Agent SDK failed: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
-    } finally {
-      setLoading(null);
-    }
-  };
+  const handleRunHarness = () =>
+    runAndShow("Running harness comparison across memory strategies...", runHarness as () => Promise<EvalRunResult>);
 
-  const handleRunTests = async () => {
-    setLoading("Running pytest suite...");
-    setError(null);
-    setTestsResult(null);
-    try {
-      const result = await runTests();
-      setTestsResult(result);
-    } catch (err) {
-      setError(
-        `Tests failed: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
-    } finally {
-      setLoading(null);
-    }
-  };
+  const handleRunAgentSdk = () =>
+    runAndShow("Running Agent SDK comparison with memory tools...", runAgentSdk as () => Promise<EvalRunResult>);
+
+  const handleRunTests = () =>
+    runAndShow("Running pytest suite...", runTests as () => Promise<EvalRunResult>);
+
+  const hasResults = activeResult !== null;
 
   return (
     <div className={styles.page}>
@@ -410,11 +476,39 @@ export default function Evals({ onBack }: { onBack: () => void }) {
         )}
         {error && <div className={styles.statusError}>{error}</div>}
 
-        {harnessResult && <HarnessResults data={harnessResult} />}
-        {agentSdkResult && <AgentSdkResults data={agentSdkResult} />}
-        {testsResult && <TestResults data={testsResult} />}
+        {/* Past runs list */}
+        {runs.length > 0 && (
+          <div className={styles.runsSection}>
+            <div className={styles.runsSectionLabel}>Past Runs</div>
+            <div className={styles.runsList}>
+              {runs.map((r) => (
+                <button
+                  key={r.id}
+                  className={`${styles.runItem} ${selectedRunId === r.id ? styles.runItemActive : ""}`}
+                  onClick={() => loadRun(r.id)}
+                >
+                  <span className={styles.runItemType}>
+                    {TYPE_LABELS[r.eval_type] || r.eval_type}
+                  </span>
+                  <span className={styles.runItemTime}>
+                    {formatTime(r.created_at)}
+                  </span>
+                  <span className={styles.runItemId}>{r.id.slice(0, 8)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
-        {!harnessResult && !agentSdkResult && !testsResult && !loading && (
+        {/* Active result display */}
+        {activeResult && (
+          <>
+            <RunIndicator data={activeResult} />
+            <ResultView data={activeResult} />
+          </>
+        )}
+
+        {!hasResults && !loading && runs.length === 0 && (
           <div className={styles.emptyResults}>
             Run an eval to see results here
           </div>

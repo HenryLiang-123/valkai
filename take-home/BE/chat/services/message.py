@@ -39,7 +39,13 @@ def handle_send_message(session_id, user_message: str) -> dict:
 
     logger.info("Response sent: session=%s events=%d", session_id, len(events))
 
-    serialized = [serialize_message("assistant", e["type"], e["content"]) for e in events]
+    serialized = [
+        serialize_message(
+            "assistant", e["type"], e["content"],
+            **{k: e[k] for k in ("input", "result") if k in e},
+        )
+        for e in events
+    ]
     return {
         "session_id": str(session.id),
         "events": serialized,

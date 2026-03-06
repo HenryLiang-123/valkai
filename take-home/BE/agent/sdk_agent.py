@@ -19,6 +19,7 @@ from claude_agent_sdk import (
     ClaudeSDKClient,
     ResultMessage,
     TextBlock,
+    ToolResultBlock,
     ToolUseBlock,
     create_sdk_mcp_server,
     tool,
@@ -56,7 +57,7 @@ def create_recall_tool(strategy: MemoryStrategy, fetch_messages: Callable[[], li
             logger.info("recall_memory tool invoked (strategy=%s, query=%r)", type(strategy).__name__, query)
             try:
                 result = await asyncio.to_thread(strategy.recall, fetch_messages, query)
-                logger.info("recall_memory returned %d chars: %s", len(result), result[:500])
+                logger.info("recall_memory returned %d chars: %s", len(result), result)
             except Exception as e:
                 logger.exception(f"recall_memory failed {e}")
                 result = "Error retrieving memories."
@@ -74,7 +75,7 @@ def create_recall_tool(strategy: MemoryStrategy, fetch_messages: Callable[[], li
             logger.info("recall_memory tool invoked (strategy=%s)", type(strategy).__name__)
             try:
                 result = await asyncio.to_thread(strategy.recall, fetch_messages)
-                logger.info("recall_memory returned %d chars: %s", len(result), result[:500])
+                logger.info("recall_memory returned %d chars: %s", len(result), result)
             except Exception as e:
                 logger.exception(f"recall_memory failed {e}")
                 result = "Error retrieving memories."
@@ -135,6 +136,7 @@ async def send_message(
         logger.info("send_message: query sent, awaiting response")
 
         response_text = ""
+        pending_tools: dict[str, dict[str, Any]] = {}
         async for message in client.receive_response():
             logger.info("send_message: received message type=%s", type(message).__name__)
             if isinstance(message, AssistantMessage):
@@ -143,7 +145,20 @@ async def send_message(
                         response_text = block.text
                     elif isinstance(block, ToolUseBlock):
                         logger.info("Tool use block: session=%s tool=%s input=%s", session_id, block.name, block.input)
-                        await _collect({"type": "tool_use", "content": block.name})
+                        tc_event = {"type": "tool_use", "content": block.name, "input": block.input, "result": None}
+                        pending_tools[block.id] = tc_event
+                        await _collect(tc_event)
+                    elif isinstance(block, ToolResultBlock):
+                        tc_event = pending_tools.get(block.tool_use_id)
+                        if tc_event is not None:
+                            if isinstance(block.content, str):
+                                tc_event["result"] = block.content
+                            elif isinstance(block.content, list):
+                                texts = [
+                                    c["text"] for c in block.content
+                                    if isinstance(c, dict) and c.get("type") == "text"
+                                ]
+                                tc_event["result"] = "\n".join(texts) if texts else None
 
     await _collect({"type": "chat_message", "content": response_text})
     return events
@@ -161,10 +176,17 @@ SYSTEM_PROMPT = (
 
 
 @dataclass
+class ToolCallResult:
+    tool: str
+    input: dict[str, Any]
+    result: str | None = None
+
+
+@dataclass
 class TurnResult:
     user_message: str
     response: str
-    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    tool_calls: list[ToolCallResult] = field(default_factory=list)
 
 
 @dataclass
@@ -226,18 +248,29 @@ async def run_conversation(
 
             await client.query(user_msg)
 
+            # Track pending tool calls by id so we can attach results
+            pending_tools: dict[str, ToolCallResult] = {}
+
             async for message in client.receive_response():
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             turn.response = block.text
                         elif isinstance(block, ToolUseBlock):
-                            turn.tool_calls.append(
-                                {
-                                    "tool": block.name,
-                                    "input": block.input,
-                                }
-                            )
+                            tc = ToolCallResult(tool=block.name, input=block.input)
+                            pending_tools[block.id] = tc
+                            turn.tool_calls.append(tc)
+                        elif isinstance(block, ToolResultBlock):
+                            tc = pending_tools.get(block.tool_use_id)
+                            if tc is not None:
+                                if isinstance(block.content, str):
+                                    tc.result = block.content
+                                elif isinstance(block.content, list):
+                                    texts = [
+                                        c["text"] for c in block.content
+                                        if isinstance(c, dict) and c.get("type") == "text"
+                                    ]
+                                    tc.result = "\n".join(texts) if texts else None
 
             conversation_log.append({
                 "role": "assistant",
@@ -261,5 +294,7 @@ def print_tool_calls(result: ConversationResult) -> None:
         print(f"  User: {turn.user_message}")
         if turn.tool_calls:
             for tc in turn.tool_calls:
-                print(f"  Tool: {tc['tool']}({tc['input']})")
+                print(f"  Tool: {tc.tool}({tc.input})")
+                if tc.result:
+                    print(f"  Result: {tc.result[:200]}")
         print(f"  Response: {turn.response[:200]}")

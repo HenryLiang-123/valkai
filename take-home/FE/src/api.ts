@@ -111,6 +111,7 @@ export interface TestsResult {
 export interface AgentSdkToolCall {
   tool: string;
   input: Record<string, string>;
+  result: string | null;
 }
 
 export interface AgentSdkTurn {
@@ -161,5 +162,30 @@ export async function runTests(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type: "tests", test_path: testPath }),
   });
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Eval Runs (persisted)
+// ---------------------------------------------------------------------------
+
+export interface EvalRunSummary {
+  id: string;
+  eval_type: "harness" | "agent_sdk" | "tests";
+  created_at: string;
+}
+
+export type EvalRunResult = (HarnessResult | AgentSdkResult | TestsResult) & {
+  run_id: string;
+  created_at: string;
+};
+
+export async function fetchEvalRuns(): Promise<EvalRunSummary[]> {
+  const res = await fetch(`${API_BASE}/evals/runs`);
+  return res.json();
+}
+
+export async function fetchEvalRun(runId: string): Promise<EvalRunResult> {
+  const res = await fetch(`${API_BASE}/evals/runs/${runId}`);
   return res.json();
 }

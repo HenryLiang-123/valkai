@@ -6,6 +6,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST, require_GET
 from dotenv import load_dotenv
 
+from chat.models import EvalRun
+from chat.serializers import serialize_eval_run_summary, serialize_eval_run_detail
 from chat.services.session import list_strategies, handle_list_sessions, handle_create_session, handle_session_messages
 from chat.services.message import handle_send_message
 from chat.services.evals import run_harness, run_tests, run_agent_sdk_harness
@@ -65,14 +67,29 @@ def run_evals(request):
     if eval_type == "harness":
         strategies = body.get("strategies")
         result = run_harness(strategies)
-        return JsonResponse(result)
     elif eval_type == "agent_sdk":
         strategies = body.get("strategies")
         result = run_agent_sdk_harness(strategies)
-        return JsonResponse(result)
     elif eval_type == "tests":
         test_path = body.get("test_path", "evals/")
         result = run_tests(test_path)
-        return JsonResponse(result)
     else:
         return JsonResponse({"error": f"Invalid eval type: {eval_type}. Use 'harness', 'agent_sdk', or 'tests'."}, status=400)
+
+    run = EvalRun.objects.create(eval_type=eval_type, result=result)
+    return JsonResponse(serialize_eval_run_detail(run))
+
+
+@require_GET
+def list_eval_runs(request):
+    runs = EvalRun.objects.all()[:50]
+    return JsonResponse([serialize_eval_run_summary(r) for r in runs], safe=False)
+
+
+@require_GET
+def get_eval_run(request, run_id):
+    try:
+        run = EvalRun.objects.get(id=run_id)
+    except EvalRun.DoesNotExist:
+        return JsonResponse({"error": "Eval run not found"}, status=404)
+    return JsonResponse(serialize_eval_run_detail(run))
