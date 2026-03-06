@@ -1,6 +1,6 @@
 # take-home
 
-Full-stack chat agent with swappable memory strategies, built on [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). Memory is exposed as a `recall_memory` tool that the agent autonomously decides when to call, rather than transparently managing conversation history behind the scenes.
+Full-stack chat agent with swappable memory strategies, built on [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). Memory is exposed as a `recall_memory` tool that the agent autonomously decides when to call, rather than transparently managing conversation history behind the scenes. Instead of running via CLI, the user can try out different memory saving methods via a natural-feeling chatbot
 
 The backend is a Django API that manages chat sessions and routes messages through the agent. The frontend is a React (Vite) app with a chat UI, session management sidebar, and an evals dashboard for running memory strategy comparisons.
 
