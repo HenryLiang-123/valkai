@@ -7,6 +7,8 @@ managing conversation history behind the scenes.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +25,8 @@ from claude_agent_sdk import (
 
 from agent.memory import MEMORY_STRATEGIES
 from agent.memory.base import MemoryStrategy
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Adapter — wraps existing MemoryStrategy classes for the save/recall tool API
@@ -108,6 +112,111 @@ def create_memory_tools(strategy_name: str):
         return {"content": [{"type": "text", "text": result}]}
 
     return save_memory, recall_memory, backend
+
+
+# ---------------------------------------------------------------------------
+# Single-turn send (used by the Django views)
+# ---------------------------------------------------------------------------
+
+
+def _create_tools_for_backend(
+    backend: _StrategyAdapter,
+    session_id: str,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+):
+    """Create save/recall tools wired to an existing backend, with logging."""
+    seen_memories: set[str] = set()
+
+    def _emit(event: dict[str, Any]) -> None:
+        if on_event is not None:
+            on_event(event)
+
+    @tool(
+        "save_memory",
+        "Save an important fact, preference, or detail from the conversation to memory. "
+        "Call this whenever the user shares personal information, preferences, or key facts.",
+        {"content": str},
+    )
+    async def save_memory(args: dict[str, Any]) -> dict[str, Any]:
+        logger.info("Tool call: save_memory session=%s content=%r", session_id, args["content"])
+        result = backend.save(args["content"])
+        content = args["content"]
+        if content not in seen_memories:
+            seen_memories.add(content)
+            _emit({"type": "saved_memory", "content": content})
+        return {"content": [{"type": "text", "text": result}]}
+
+    @tool(
+        "recall_memory",
+        "Retrieve previously stored information from memory. "
+        "Call this when you need to answer a question that may depend on earlier context.",
+        {"query": str},
+    )
+    async def recall_memory(args: dict[str, Any]) -> dict[str, Any]:
+        logger.info("Tool call: recall_memory session=%s query=%r", session_id, args["query"])
+        result = backend.recall(args["query"])
+        return {"content": [{"type": "text", "text": result}]}
+
+    return save_memory, recall_memory, seen_memories
+
+
+async def send_message(
+    backend: _StrategyAdapter,
+    user_message: str,
+    session_id: str,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
+    """Send a single user message through the agent and return typed events.
+
+    If *on_event* is provided it is called immediately for every event
+    (saved_memory, chat_message) as it is produced — useful for persisting
+    each message to the DB in real time.
+
+    Returns the full list of events for convenience.
+    """
+    events: list[dict[str, Any]] = []
+
+    def _collect(event: dict[str, Any]) -> None:
+        events.append(event)
+        if on_event is not None:
+            on_event(event)
+
+    save_tool, recall_tool, _seen = _create_tools_for_backend(backend, session_id, _collect)
+
+    server = create_sdk_mcp_server(
+        name="memory",
+        version="1.0.0",
+        tools=[save_tool, recall_tool],
+    )
+
+    options = ClaudeAgentOptions(
+        system_prompt=SYSTEM_PROMPT,
+        mcp_servers={"memory": server},
+        allowed_tools=["mcp__memory__save_memory", "mcp__memory__recall_memory"],
+        permission_mode="bypassPermissions",
+        model="claude-haiku-4-5-20251001",
+        max_turns=10,
+    )
+
+    async with ClaudeSDKClient(options=options) as client:
+        await client.query(user_message, session_id=session_id)
+
+        response_text = ""
+        async for message in client.receive_response():
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        response_text = block.text
+                    elif isinstance(block, ToolUseBlock):
+                        logger.info("Tool use block: session=%s tool=%s input=%s", session_id, block.name, block.input)
+                        if block.name == "mcp__memory__save_memory":
+                            content = block.input.get("content", "")
+                            if content and content not in _seen:
+                                _seen.add(content)
+                                _collect({"type": "saved_memory", "content": content})
+
+    _collect({"type": "chat_message", "content": response_text})
+    return events
 
 
 # ---------------------------------------------------------------------------

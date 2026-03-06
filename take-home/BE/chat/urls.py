@@ -1,5 +1,5 @@
 from django.urls import path
-from . import views
+from chat import views
 
 urlpatterns = [
     path("strategies", views.strategies, name="strategies"),
