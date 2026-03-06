@@ -16,6 +16,7 @@ The backend is a Django API that manages chat sessions and routes messages throu
 The fastest way to get everything running:
 
 ```bash
+cd take-home
 # From the take-home/ directory
 ./setup.sh          # installs mise, uv, node, all deps, runs DB migrations
 
