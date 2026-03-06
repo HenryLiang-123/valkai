@@ -1,14 +1,13 @@
 [project]
 name = "take-home"
-version = "0.1.0"
-description = "Barebones CLI chat agent built on LangChain Deep Agents"
+version = "0.2.0"
+description = "CLI chat agent built on Claude Agent SDK with tool-based memory strategies"
 requires-python = ">=3.13"
 dependencies = [
-    "deepagents",
+    "claude-agent-sdk",
+    "anthropic",
     "langchain",
-    "langchain-openai",
     "langchain-anthropic",
-    "langchain-google-genai",
     "python-dotenv",
     "sentence-transformers",
     "numpy",
@@ -25,6 +24,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["evals"]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["hatchling"]

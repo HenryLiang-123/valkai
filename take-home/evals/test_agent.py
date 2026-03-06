@@ -1,34 +1,28 @@
+"""Basic agent evals using Claude Agent SDK."""
+
 import pytest
 from dotenv import load_dotenv
 
-from agent.core import make_agent
+from agent.sdk_agent import run_conversation
 
 load_dotenv()
 
 
-@pytest.fixture
-def agent():
-    return make_agent()
-
-
-def test_agent_responds(agent):
+@pytest.mark.asyncio
+async def test_agent_responds():
     """Agent should return a non-empty response to a simple question."""
-    result = agent.invoke(
-        {"messages": [{"role": "user", "content": "What is 2 + 2?"}]}
-    )
-    assert len(result["messages"]) > 1
-    ai_msg = result["messages"][-1]
-    assert ai_msg.content
-    assert "4" in ai_msg.content
+    result = await run_conversation("buffer", ["What is 2 + 2?"])
+    assert len(result.turns) == 1
+    assert result.turns[0].response
+    assert "4" in result.turns[0].response
 
 
-def test_agent_multi_turn(agent):
-    """Agent should handle multi-turn conversation."""
-    r1 = agent.invoke(
-        {"messages": [{"role": "user", "content": "My name is Alice."}]}
+@pytest.mark.asyncio
+async def test_agent_multi_turn():
+    """Agent should handle multi-turn conversation with memory tools."""
+    result = await run_conversation(
+        "buffer",
+        ["My name is Alice.", "What is my name?"],
     )
-    msgs = r1["messages"]
-    msgs.append({"role": "user", "content": "What is my name?"})
-    r2 = agent.invoke({"messages": msgs})
-    ai_msg = r2["messages"][-1]
-    assert "Alice" in ai_msg.content
+    assert len(result.turns) == 2
+    assert "Alice" in result.turns[-1].response

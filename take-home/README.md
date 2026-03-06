@@ -1,12 +1,13 @@
 # take-home
 
-Barebones CLI chat agent built on [LangChain Deep Agents](https://github.com/langchain-ai/deepagents). Supports OpenAI, Anthropic, and Google models out of the box. Includes 4 swappable memory strategies and a comparison harness to demonstrate recall trade-offs.
+CLI chat agent built on [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). Memory strategies are exposed as tools (`save_memory` / `recall_memory`) that the agent autonomously decides when to call, rather than transparently managing conversation history behind the scenes.
 
 ## Prerequisites
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/) package manager
-- At least one LLM provider API key
+- `ANTHROPIC_API_KEY` environment variable
+- Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
 
 ## Quick start
 
@@ -15,43 +16,41 @@ git clone https://github.com/valkai-tech/take-home.git
 cd take-home
 uv sync
 cp .env.example .env
-# Fill in your API key(s) in .env
+# Fill in your ANTHROPIC_API_KEY in .env
 ```
 
 ## Usage
 
 ```bash
-# Default model (Anthropic Claude Haiku — cheapest)
+# Default (buffer memory)
 uv run chat
 
 # Choose a memory strategy
 uv run chat --memory buffer      # Full history (default)
-uv run chat --memory window      # Last 6 messages only
+uv run chat --memory window      # Last 6 entries only
 uv run chat --memory summary     # LLM-compressed running summary
 uv run chat --memory retrieval   # Accumulated summaries + semantic retrieval
-
-# OpenAI
-uv run chat --model openai:gpt-4o
-
-# Google
-uv run chat --model google_genai:gemini-2.5-flash
-
-# Custom system prompt
-uv run chat --system "You are a helpful coding assistant."
 ```
 
 Type `quit` or `exit` to end the session.
 
 ## Memory Strategies
 
-| Strategy | How it works | Recalls old facts? | Token cost | Extra calls |
-|----------|-------------|-------------------|------------|-------------|
-| **Buffer** | Stores full history | Yes | Grows unbounded | None |
-| **Window** | Keeps last 6 messages | No (dropped) | Fixed low | None |
-| **Summary** | LLM-compresses history into one running summary every 4 turns | Partially (lossy) | Medium | LLM summarize |
-| **Retrieval Summary** | Accumulates summaries + embeds them; retrieves top-k by cosine similarity per query | Yes (if relevant match) | Low-medium | LLM summarize + embedding |
+Each strategy is a backend for two tools the agent can call:
 
-Key difference: **Summary** overwrites its summary each cycle (linear, lossy). **Retrieval Summary** stores multiple summaries and selectively retrieves only the relevant ones per question.
+- **`save_memory(content)`** — store a fact, preference, or detail
+- **`recall_memory(query)`** — retrieve previously stored information
+
+The agent decides when to call these tools based on the conversation. The system prompt instructs it to save noteworthy facts immediately and recall memories before answering questions that might depend on earlier context.
+
+| Strategy | save_memory behavior | recall_memory behavior | Recalls old facts? | Token cost | Extra calls |
+|----------|---------------------|----------------------|-------------------|------------|-------------|
+| **Buffer** | Append verbatim | Return all entries | Yes | Grows unbounded | None |
+| **Window** | Append, keep last k | Return last k entries | No (evicted) | Fixed low | None |
+| **Summary** | Append; after N saves, LLM-compress into running summary | Return summary + recent entries | Partially (lossy) | Medium | LLM summarize |
+| **Retrieval Summary** | Append + embed; after N saves, LLM-compress + embed summary | Embed query, cosine-search top-k summaries | Yes (if relevant match) | Low-medium | LLM summarize + embedding |
+
+Key difference: **Summary** overwrites its summary each cycle (linear, lossy). **Retrieval Summary** stores multiple summaries and selectively retrieves only the relevant ones per query.
 
 ### Trade-offs & When to Use Each
 
@@ -65,36 +64,20 @@ Key difference: **Summary** overwrites its summary each cycle (linear, lossy). *
 
 For a production system at Valkai, the ideal approach would likely combine strategies — retrieval summary for long-term user memory with a buffer or window for the current session's immediate context.
 
-## Comparison Harness
-
-Run the same 8-turn scripted conversation through all 4 strategies and compare recall:
-
-```bash
-uv run python -m harness.run_comparison
-
-# Skip retrieval strategy (faster, no embedding model download)
-uv run python -m harness.run_comparison --skip-retrieval
-```
-
-The harness shares facts in turns 1-2, sends filler in turns 3-6, then tests recall in turns 7-8.
-
 ## Running evals
 
 ```bash
-uv run pytest evals/ -v
+# Run all evals (makes real LLM + Agent SDK calls)
+uv run pytest evals/ -v -s
+
+# Run memory strategy evals only (shows granular tool call output)
+uv run pytest evals/test_memory.py -v -s
+
+# Run basic agent evals only
+uv run pytest evals/test_agent.py -v -s
 ```
 
-Evals include both unit tests (mocked, no API calls) and integration tests (real LLM calls).
-
-## Supported providers
-
-| Provider  | Model string example                          | Required env var       |
-|-----------|-----------------------------------------------|------------------------|
-| Anthropic | `anthropic:claude-haiku-4-5-20251001` (default) | `ANTHROPIC_API_KEY`    |
-| OpenAI    | `openai:gpt-4o`                               | `OPENAI_API_KEY`       |
-| Google    | `google_genai:gemini-2.5-flash`               | `GOOGLE_API_KEY`       |
-
-Any model supported by LangChain's [`init_chat_model`](https://docs.langchain.com/oss/python/langchain/models) works — just pass the `provider:model` string.
+The `-s` flag prints granular tool call logs: for each turn, you'll see the user message, any `save_memory`/`recall_memory` calls the agent made (with arguments), and the agent's final response.
 
 ## Project structure
 
@@ -105,7 +88,8 @@ take-home/
 ├── DESIGN.md               # Architecture & trade-off analysis
 ├── src/
 │   └── agent/
-│       ├── core.py         # Agent factory (create_deep_agent wrapper)
+│       ├── sdk_agent.py    # Claude Agent SDK agent loop + memory tools
+│       ├── core.py         # Legacy LangChain agent factory (retained for reference)
 │       ├── cli.py          # Interactive chat REPL with --memory flag
 │       └── memory/
 │           ├── base.py     # Abstract MemoryStrategy interface
@@ -116,6 +100,28 @@ take-home/
 ├── harness/
 │   └── run_comparison.py   # Scripted conversation, side-by-side comparison
 └── evals/
-    ├── test_agent.py       # Barebones agent evals
+    ├── test_agent.py       # Basic agent evals (Claude Agent SDK)
     └── test_memory.py      # Memory strategy unit + integration tests
 ```
+
+## Why Claude Agent SDK over LangChain?
+
+### Why we chose Claude Agent SDK
+
+**Production safety & governance** — Claude Agent SDK has built-in permission modes (`acceptEdits`, default review mode) and tool-boundary hooks for observability. Security-first design means fewer accidental side effects. LangChain has no built-in permission model — tool execution is all-or-nothing. You'd need to bolt on custom middleware to gate tool calls, and there's no standard hook system for auditing what the agent did at tool boundaries.
+
+**Minimal abstraction overhead** — Claude Agent SDK loads nothing unless you ask for it. LangChain pulls in a deep dependency tree — a fresh install brings `RunnableSequence`, `ChatPromptTemplate`, `AgentExecutor`, callback managers, and dozens of wrapper classes. Business logic becomes entangled with LangChain primitives, making it hard to extract or migrate later. The API also broke frequently across 0.x releases, creating an upgrade treadmill.
+
+**Native tool orchestration** — MCP support, `@tool` decorator, and `create_sdk_mcp_server` make custom tools first-class citizens. The agent autonomously decides when to call tools. LangChain's tool system requires more ceremony — you define tools, then wire them into an `AgentExecutor` or `RunnableAgent` chain, configure output parsers, and handle the tool-calling loop yourself (or rely on LangGraph for the loop). The framework, not the model, drives the control flow.
+
+**Session management** — `ClaudeSDKClient` maintains conversation context across turns with resume/fork support, ideal for the memory strategy experiments here. LangChain has no native session manager — you manually pass message lists into `.invoke()` each turn and manage history yourself (which is exactly what the old `MemoryStrategy` classes were doing).
+
+**Same foundation as Claude Code** — battle-tested in Anthropic's own production agent; not a research prototype. LangChain's Deep Agents (their closest equivalent) launched more recently and is still establishing its production track record.
+
+### Tradeoffs we accept
+
+**Vendor lock-in** — Claude Agent SDK is optimized for Anthropic's Claude models. LangChain supports 200+ integrations across OpenAI, Google, local models, and niche providers. If multi-model flexibility were a requirement, LangChain would be the stronger choice.
+
+**Smaller ecosystem** — LangChain's Python ecosystem is deeper for RAG pipelines, vector DB adapters, document loaders, and community recipes. For exotic data sources or complex retrieval patterns, LangChain has more off-the-shelf adapters.
+
+**Less mature community** — LangChain has years of Stack Overflow answers, tutorials, and third-party tooling. Claude Agent SDK is newer (launched Sept 2025) with a smaller but growing community.

@@ -1,4 +1,4 @@
-"""Tests for memory strategies — unit tests (no LLM) and integration tests (real LLM calls)."""
+"""Tests for memory strategies — unit tests (no LLM) and integration tests (Claude Agent SDK)."""
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -10,7 +10,7 @@ from agent.memory.window import WindowMemory
 from agent.memory.summary import SummaryMemory
 from agent.memory.retrieval import RetrievalSummaryMemory
 from agent.memory import MEMORY_STRATEGIES
-from agent.core import make_agent
+from agent.sdk_agent import run_conversation, print_tool_calls
 
 load_dotenv()
 
@@ -153,50 +153,44 @@ class TestRegistry:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests (real LLM calls)
+# Integration tests (Claude Agent SDK — real LLM calls + tool use)
 # ---------------------------------------------------------------------------
 
+SCRIPTED_TURNS = [
+    "My name is Henry and I prefer TypeScript.",
+    "What's the weather?",
+    "Tell me a joke.",
+    "What's my name and what language do I prefer?",
+]
 
-@pytest.fixture
-def agent():
-    return make_agent()
+SCRIPTED_TURNS_WINDOW = [
+    "My name is Bartholomew and I prefer Haskell.",
+    "What's the weather?",
+    "Tell me a joke.",
+    "What's 2+2?",
+    "Recommend a book.",
+    "What's my name and what language do I prefer?",
+]
 
 
-def test_buffer_recalls_facts(agent):
-    """Buffer memory should recall facts from early in the conversation."""
-    mem = BufferMemory()
-    turns = [
-        "My name is Henry and I prefer TypeScript.",
-        "What's the weather?",
-        "Tell me a joke.",
-        "What's my name and what language do I prefer?",
-    ]
-    for turn in turns:
-        mem.add_user_message(turn)
-        result = agent.invoke({"messages": mem.get_messages()})
-        mem.add_assistant_messages(result["messages"])
+@pytest.mark.asyncio
+async def test_buffer_agent_recalls():
+    """Buffer strategy: the agent should save facts and recall them later."""
+    result = await run_conversation("buffer", SCRIPTED_TURNS)
+    print_tool_calls(result)
 
-    last_response = result["messages"][-1].content
+    last_response = result.turns[-1].response
     assert "Henry" in last_response
     assert "TypeScript" in last_response
 
 
-def test_window_loses_old_facts(agent):
-    """Window memory with small window should forget early facts."""
-    mem = WindowMemory(window_size=4)
-    turns = [
-        "My name is Bartholomew and I prefer Haskell.",
-        "What's the weather?",
-        "Tell me a joke.",
-        "What's 2+2?",
-        "Recommend a book.",
-        "What's my name and what language do I prefer?",
-    ]
-    for turn in turns:
-        mem.add_user_message(turn)
-        result = agent.invoke({"messages": mem.get_messages()})
-        mem.add_assistant_messages(result["messages"])
+@pytest.mark.asyncio
+async def test_window_agent_forgets():
+    """Window strategy: with a small window, the agent should lose early facts."""
+    result = await run_conversation("window", SCRIPTED_TURNS_WINDOW)
+    print_tool_calls(result)
 
-    last_response = result["messages"][-1].content.lower()
-    # Window should have dropped the first message containing name/language
+    last_response = result.turns[-1].response.lower()
+    # Window backend only keeps last 6 entries — early save_memory calls get evicted
+    # The agent may not be able to recall facts that were pushed out of the window
     assert "bartholomew" not in last_response or "haskell" not in last_response

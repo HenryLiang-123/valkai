@@ -8,39 +8,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 uv sync
 
-# Run the chat agent (default: Anthropic Claude Haiku)
+# Run the chat agent (default: buffer memory)
 uv run chat
 
-# Run with a specific model
-uv run chat --model openai:gpt-4o
-uv run chat --model google_genai:gemini-2.5-flash
-uv run chat --model anthropic:claude-haiku-4-5-20251001
+# Choose a memory strategy
+uv run chat --memory buffer
+uv run chat --memory window
+uv run chat --memory summary
+uv run chat --memory retrieval
 
-# Run with a custom system prompt
-uv run chat --system "You are a helpful coding assistant."
-
-# Run evals (makes real LLM API calls)
-uv run pytest evals/ -v
+# Run evals (makes real LLM + Agent SDK calls)
+uv run pytest evals/ -v -s
 
 # Run a single eval file
-uv run pytest evals/test_agent.py -v
+uv run pytest evals/test_agent.py -v -s
 ```
 
 ## Architecture
 
-This is a barebones CLI chat agent built on [LangChain Deep Agents](https://github.com/langchain-ai/deepagents). The entry point is `agent.cli:main`.
+CLI chat agent built on [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). Memory strategies are exposed as tools (`save_memory` / `recall_memory`) that the agent autonomously calls.
 
-**Intended structure** (to be implemented):
+**Key files:**
 ```
 src/agent/
-    core.py     # Agent factory — wraps create_deep_agent from deepagents
-    cli.py      # Interactive REPL — reads user input, streams agent responses, handles quit/exit
+    sdk_agent.py  # Claude Agent SDK agent loop + memory tool backends
+    cli.py        # Interactive REPL with --memory flag
+    core.py       # Legacy LangChain agent factory (retained for reference)
+    memory/       # Original MemoryStrategy classes (used by unit tests)
 evals/
-    test_agent.py  # pytest evals making real LLM calls
+    test_agent.py   # Basic agent evals (Claude Agent SDK)
+    test_memory.py  # Memory strategy unit + integration tests
 ```
 
-**Model string format:** `provider:model-name` (e.g. `anthropic:claude-haiku-4-5-20251001`). Parsed by LangChain's `init_chat_model`. Supported providers: `anthropic`, `openai`, `google_genai`.
-
-**Environment:** API keys loaded from `.env` via `python-dotenv`. Copy `.env.example` to `.env` and fill in the relevant key(s).
+**Environment:** `ANTHROPIC_API_KEY` loaded from `.env` via `python-dotenv`.
 
 **Package manager:** `uv` — use `uv run` to execute scripts, `uv sync` to install deps, `uv add` to add packages.
