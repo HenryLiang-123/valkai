@@ -4,6 +4,7 @@ import logging
 from agent.sdk_agent import send_message
 
 from chat.models import ChatMessage, ChatSession
+from chat.serializers import serialize_message
 from chat.services.db import db_retry
 from chat.services.session import get_session, get_memory_backend
 
@@ -36,7 +37,9 @@ def handle_send_message(session_id, user_message: str) -> dict:
     events = asyncio.run(send_message(backend, user_message, str(session.id), on_event=_persist))
 
     logger.info("Response sent: session=%s events=%d", session_id, len(events))
+
+    serialized = [serialize_message("assistant", e["type"], e["content"]) for e in events]
     return {
         "session_id": str(session.id),
-        "events": events,
+        "events": serialized,
     }

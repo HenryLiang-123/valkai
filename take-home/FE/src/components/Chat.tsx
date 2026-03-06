@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchMessages, sendMessage, type ChatEvent, type Message } from "../api";
+import { fetchMessages, sendMessage, type ChatEvent } from "../api";
 import styles from "./Chat.module.css";
 
 interface Props {
@@ -8,27 +8,15 @@ interface Props {
   onBack: () => void;
 }
 
-interface DisplayMessage {
-  role: "user" | "assistant";
-  type: "chat_message" | "saved_memory";
-  content: string;
-}
-
 export default function Chat({ sessionId, strategy, onBack }: Props) {
-  const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const [messages, setMessages] = useState<ChatEvent[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchMessages(sessionId).then((data) => {
-      setMessages(
-        data.messages.map((m: Message) => ({
-          role: m.role,
-          type: m.message_type,
-          content: m.content,
-        }))
-      );
+      setMessages(data.messages);
     });
   }, [sessionId]);
 
@@ -44,24 +32,19 @@ export default function Chat({ sessionId, strategy, onBack }: Props) {
     setSending(true);
     setMessages((prev) => [
       ...prev,
-      { role: "user", type: "chat_message", content: text },
+      { type: "chat_message", role: "user", text },
     ]);
 
     try {
       const data = await sendMessage(sessionId, text);
-      const newMessages: DisplayMessage[] = data.events.map((e: ChatEvent) => ({
-        role: "assistant" as const,
-        type: e.type,
-        content: e.content,
-      }));
-      setMessages((prev) => [...prev, ...newMessages]);
+      setMessages((prev) => [...prev, ...data.events]);
     } catch (err) {
       setMessages((prev) => [
         ...prev,
         {
-          role: "assistant",
-          type: "chat_message",
-          content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+          type: "chat_message" as const,
+          role: "assistant" as const,
+          text: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
         },
       ]);
     } finally {
@@ -84,17 +67,18 @@ export default function Chat({ sessionId, strategy, onBack }: Props) {
           <div
             key={i}
             className={`${styles.msg} ${
-              msg.role === "user"
-                ? styles.user
-                : msg.type === "saved_memory"
+              msg.type === "tool_use"
                 ? styles.savedMemory
+                : msg.role === "user"
+                ? styles.user
                 : styles.assistant
             }`}
           >
-            {msg.type === "saved_memory" && (
-              <span className={styles.memoryLabel}>Memory saved</span>
+            {msg.type === "tool_use" ? (
+              <span className={styles.memoryLabel}>Tool: {msg.tool_name}</span>
+            ) : (
+              msg.text
             )}
-            {msg.content}
           </div>
         ))}
         {sending && (

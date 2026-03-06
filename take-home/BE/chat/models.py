@@ -11,7 +11,7 @@ STRATEGY_CHOICES = [
 
 MESSAGE_TYPE_CHOICES = [
     ("chat_message", "Chat Message"),
-    ("saved_memory", "Saved Memory"),
+    ("tool_use", "Tool Use"),
 ]
 
 

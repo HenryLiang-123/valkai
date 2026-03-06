@@ -6,6 +6,7 @@ from agent.memory import MEMORY_STRATEGIES
 from agent.sdk_agent import _StrategyAdapter
 
 from chat.models import ChatSession
+from chat.serializers import serialize_message
 from chat.services.db import db_retry
 
 logger = logging.getLogger(__name__)
@@ -50,11 +51,15 @@ def handle_create_session(strategy: str) -> dict | None:
 
 def handle_session_messages(session_id) -> dict:
     session = get_session(session_id)
-    messages = db_retry(
+    rows = db_retry(
         lambda: list(session.messages.all().values(
-            "id", "role", "message_type", "content", "created_at"
+            "role", "message_type", "content"
         ))
     )
+    messages = [
+        serialize_message(row["role"], row["message_type"], row["content"])
+        for row in rows
+    ]
     return {
         "session_id": str(session.id),
         "strategy": session.strategy,

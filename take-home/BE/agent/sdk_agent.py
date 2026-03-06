@@ -122,14 +122,8 @@ def create_memory_tools(strategy_name: str):
 def _create_tools_for_backend(
     backend: _StrategyAdapter,
     session_id: str,
-    on_event: Callable[[dict[str, Any]], None] | None = None,
 ):
     """Create save/recall tools wired to an existing backend, with logging."""
-    seen_memories: set[str] = set()
-
-    def _emit(event: dict[str, Any]) -> None:
-        if on_event is not None:
-            on_event(event)
 
     @tool(
         "save_memory",
@@ -140,10 +134,6 @@ def _create_tools_for_backend(
     async def save_memory(args: dict[str, Any]) -> dict[str, Any]:
         logger.info("Tool call: save_memory session=%s content=%r", session_id, args["content"])
         result = backend.save(args["content"])
-        content = args["content"]
-        if content not in seen_memories:
-            seen_memories.add(content)
-            _emit({"type": "saved_memory", "content": content})
         return {"content": [{"type": "text", "text": result}]}
 
     @tool(
@@ -157,7 +147,7 @@ def _create_tools_for_backend(
         result = backend.recall(args["query"])
         return {"content": [{"type": "text", "text": result}]}
 
-    return save_memory, recall_memory, seen_memories
+    return save_memory, recall_memory
 
 
 async def send_message(
@@ -169,7 +159,7 @@ async def send_message(
     """Send a single user message through the agent and return typed events.
 
     If *on_event* is provided it is called immediately for every event
-    (saved_memory, chat_message) as it is produced — useful for persisting
+    (tool_use, chat_message) as it is produced — useful for persisting
     each message to the DB in real time.
 
     Returns the full list of events for convenience.
@@ -181,7 +171,7 @@ async def send_message(
         if on_event is not None:
             on_event(event)
 
-    save_tool, recall_tool, _seen = _create_tools_for_backend(backend, session_id, _collect)
+    save_tool, recall_tool = _create_tools_for_backend(backend, session_id)
 
     server = create_sdk_mcp_server(
         name="memory",
@@ -209,11 +199,7 @@ async def send_message(
                         response_text = block.text
                     elif isinstance(block, ToolUseBlock):
                         logger.info("Tool use block: session=%s tool=%s input=%s", session_id, block.name, block.input)
-                        if block.name == "mcp__memory__save_memory":
-                            content = block.input.get("content", "")
-                            if content and content not in _seen:
-                                _seen.add(content)
-                                _collect({"type": "saved_memory", "content": content})
+                        _collect({"type": "tool_use", "content": block.name})
 
     _collect({"type": "chat_message", "content": response_text})
     return events

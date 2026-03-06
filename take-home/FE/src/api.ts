@@ -6,23 +6,24 @@ export interface Strategy {
   description: string;
 }
 
-export interface ChatEvent {
-  type: "chat_message" | "saved_memory";
-  content: string;
+export interface ChatMessage {
+  type: "chat_message";
+  role: "user" | "assistant";
+  text: string;
 }
 
-export interface Message {
-  id: number;
-  role: "user" | "assistant";
-  message_type: "chat_message" | "saved_memory";
-  content: string;
-  created_at: string;
+export interface ToolUseMessage {
+  type: "tool_use";
+  role: "assistant";
+  tool_name: string;
 }
+
+export type ChatEvent = ChatMessage | ToolUseMessage;
 
 export interface SessionInfo {
   session_id: string;
   strategy: string;
-  messages: Message[];
+  messages: ChatEvent[];
 }
 
 export async function fetchStrategies(): Promise<Strategy[]> {
