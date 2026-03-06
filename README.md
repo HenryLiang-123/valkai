@@ -1,15 +1,21 @@
-# take-home
+# Valkai Take-Home: Memory-Augmented Chatbot
 
-Full-stack chat agent with swappable memory strategies, built on [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). Memory is exposed as a `recall_memory` tool that the agent autonomously decides when to call, rather than transparently managing conversation history behind the scenes. Instead of running via CLI, the user can try out different memory saving methods via a natural-feeling chatbot
+Full-stack chat agent with swappable memory strategies, built on [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python). Memory is exposed as a `recall_memory` tool that the agent autonomously decides when to call, rather than transparently managing conversation history behind the scenes. Instead of running via CLI, the user can try out different memory saving methods via a natural-feeling chatbot.
 
-The backend is a Django API that manages chat sessions and routes messages through the agent. The frontend is a React (Vite) app with a chat UI, session management sidebar, and an evals dashboard for running memory strategy comparisons.
+I'm interested in human-AI interaction, so beyond implementing the memory strategies themselves, I wanted to explore how the dynamic between a human and an AI changes when the AI has memory tools at its disposal. The user can observe and interact with that behavior in real time.
+
+## Architecture
+
+- **Backend** — Django API that manages chat sessions and routes messages through the Claude Agent SDK agent. The agent is given `save_memory` and `recall_memory` as tools, backed by swappable memory strategies (buffer, window, summary, retrieval).
+- **Frontend** — React/TypeScript (Vite) chat UI with session management sidebar, strategy selection, tool-use visibility, and an evals dashboard for running memory strategy comparisons.
+- **Evals** — pytest-based harness and Agent SDK harness for evaluating memory strategy quality across conversations.
 
 ## Prerequisites
 
 - Python 3.13+
 - Node.js 22+ (managed via [mise](https://mise.jit.io/) if you use the setup script)
 - [uv](https://docs.astral.sh/uv/) package manager
-- `ANTHROPIC_API_KEY` environment variable (set in `BE/.env`)
+- `ANTHROPIC_API_KEY` environment variable (set in `take-home/BE/.env`)
 
 ## Quick start
 
@@ -17,7 +23,6 @@ The fastest way to get everything running:
 
 ```bash
 cd take-home
-# From the take-home/ directory
 ./setup.sh          # installs mise, uv, node, all deps, runs DB migrations
 
 mise run dev         # starts both BE and FE in parallel
@@ -26,41 +31,6 @@ mise run dev         # starts both BE and FE in parallel
 This starts:
 - **Backend** at http://localhost:8000
 - **Frontend** at http://localhost:5173
-
-### Manual setup
-
-If you prefer to set things up yourself:
-
-```bash
-# Backend
-cd BE
-uv sync                                    # install Python deps
-echo "ANTHROPIC_API_KEY=sk-..." > .env     # create .env with your key
-uv run python manage.py migrate            # set up SQLite database
-uv run python manage.py runserver 8000     # start Django dev server
-
-# Frontend (in a separate terminal)
-cd FE
-npm install
-npm run dev                                # start Vite dev server on :5173
-```
-
-### CLI agent (standalone, no web server needed)
-
-```bash
-cd BE
-
-# Default (buffer memory)
-uv run chat
-
-# Choose a memory strategy
-uv run chat --memory buffer      # full history (default)
-uv run chat --memory window      # last 6 entries only
-uv run chat --memory summary     # LLM-compressed running summary
-uv run chat --memory retrieval   # accumulated summaries + semantic retrieval
-```
-
-Type `quit` or `exit` to end the session.
 
 ## API endpoints
 
@@ -80,7 +50,7 @@ All endpoints are under `/api/`:
 Evals can be run from the frontend evals dashboard or via the command line:
 
 ```bash
-cd BE
+cd take-home/BE
 
 # Run all evals (makes real LLM + Agent SDK calls)
 uv run pytest evals/ -v -s
