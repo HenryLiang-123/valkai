@@ -3,7 +3,6 @@
 import logging
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 from harness.run_comparison import run_comparison, SCRIPTED_TURNS, RECALL_TURNS, check_recall
@@ -48,7 +47,7 @@ def run_harness(strategies: list[str] | None = None) -> dict:
 def run_tests(test_path: str = "evals/") -> dict:
     """Run pytest on the given path and return structured results."""
     cmd = [
-        sys.executable, "-m", "pytest",
+        "uv", "run", "pytest",
         test_path,
         "--tb=short",
         "-v",
