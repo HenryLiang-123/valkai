@@ -5,10 +5,9 @@ import styles from "./Chat.module.css";
 interface Props {
   sessionId: string;
   strategy: string;
-  onBack: () => void;
 }
 
-export default function Chat({ sessionId, strategy, onBack }: Props) {
+export default function Chat({ sessionId, strategy }: Props) {
   const [messages, setMessages] = useState<ChatEvent[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -55,14 +54,17 @@ export default function Chat({ sessionId, strategy, onBack }: Props) {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <button className={styles.back} onClick={onBack}>
-          &larr; Back
-        </button>
         <h1 className={styles.title}>Memory Agent</h1>
         <span className={styles.badge}>{strategy}</span>
       </header>
 
       <div className={styles.chatArea}>
+        {messages.length === 0 && (
+          <div className={styles.welcome}>
+            <h2>New conversation</h2>
+            <p className={styles.hint}>Send a message to get started.</p>
+          </div>
+        )}
         {messages.map((msg, i) => (
           <div
             key={i}
@@ -82,7 +84,7 @@ export default function Chat({ sessionId, strategy, onBack }: Props) {
           </div>
         ))}
         {sending && (
-          <div className={`${styles.msg} ${styles.loading}`}>Thinking...</div>
+          <div className={`${styles.msg} ${styles.loading}`}>Thinking</div>
         )}
         <div ref={bottomRef} />
       </div>

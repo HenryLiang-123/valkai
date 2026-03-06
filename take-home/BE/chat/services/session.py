@@ -37,6 +37,22 @@ def list_strategies() -> list[dict]:
     ]
 
 
+def handle_list_sessions() -> list[dict]:
+    sessions = db_retry(
+        lambda: list(ChatSession.objects.order_by("-created_at").values(
+            "id", "strategy", "created_at"
+        ))
+    )
+    return [
+        {
+            "id": str(s["id"]),
+            "strategy": s["strategy"],
+            "created_at": s["created_at"].isoformat(),
+        }
+        for s in sessions
+    ]
+
+
 def handle_create_session(strategy: str) -> dict | None:
     if strategy not in MEMORY_STRATEGIES:
         return None

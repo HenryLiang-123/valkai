@@ -31,8 +31,8 @@ def handle_send_message(session_id, user_message: str) -> dict:
 
     save_message(session, "user", "chat_message", user_message)
 
-    def _persist(event):
-        save_message(session, "assistant", event["type"], event["content"])
+    async def _persist(event):
+        await asyncio.to_thread(save_message, session, "assistant", event["type"], event["content"])
 
     events = asyncio.run(send_message(backend, user_message, str(session.id), on_event=_persist))
 

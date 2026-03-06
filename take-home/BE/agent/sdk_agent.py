@@ -154,7 +154,7 @@ async def send_message(
     backend: _StrategyAdapter,
     user_message: str,
     session_id: str,
-    on_event: Callable[[dict[str, Any]], None] | None = None,
+    on_event: Callable[[dict[str, Any]], Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Send a single user message through the agent and return typed events.
 
@@ -166,10 +166,12 @@ async def send_message(
     """
     events: list[dict[str, Any]] = []
 
-    def _collect(event: dict[str, Any]) -> None:
+    async def _collect(event: dict[str, Any]) -> None:
         events.append(event)
         if on_event is not None:
-            on_event(event)
+            result = on_event(event)
+            if hasattr(result, "__await__"):
+                await result
 
     save_tool, recall_tool = _create_tools_for_backend(backend, session_id)
 
@@ -199,9 +201,9 @@ async def send_message(
                         response_text = block.text
                     elif isinstance(block, ToolUseBlock):
                         logger.info("Tool use block: session=%s tool=%s input=%s", session_id, block.name, block.input)
-                        _collect({"type": "tool_use", "content": block.name})
+                        await _collect({"type": "tool_use", "content": block.name})
 
-    _collect({"type": "chat_message", "content": response_text})
+    await _collect({"type": "chat_message", "content": response_text})
     return events
 
 

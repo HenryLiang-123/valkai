@@ -1,3 +1,40 @@
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400&family=Sora:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg-deep: #110f0d;
+  --bg-base: #161412;
+  --bg-surface: #1d1a17;
+  --bg-elevated: #252219;
+  --bg-hover: #2c2820;
+  --border: #2a2620;
+  --border-subtle: #211e1a;
+  --text-primary: #ede6db;
+  --text-secondary: #a09788;
+  --text-muted: #635b50;
+  --text-faint: #3e3830;
+  --accent: #c9956b;
+  --accent-bright: #daa87e;
+  --accent-dim: #a07548;
+  --accent-bg: #231a12;
+  --accent-border: #3d2e1e;
+  --green: #6aad7a;
+  --green-dim: #4a8a5a;
+  --green-bg: #162016;
+  --red: #d06060;
+  --red-bg: #241414;
+  --yellow: #d4a94e;
+  --yellow-bg: #241e10;
+  --font-display: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --font-body: 'Sora', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Menlo', monospace;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-soft: 0 2px 12px rgba(0,0,0,0.3);
+  --shadow-glow: 0 0 20px rgba(201,149,107,0.06);
+  --transition: 150ms ease;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -5,13 +42,53 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: #0f0f0f;
-  color: #e0e0e0;
+  font-family: var(--font-body);
+  background: var(--bg-deep);
+  color: var(--text-primary);
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
 }
 
 a {
-  color: #6366f1;
+  color: var(--accent);
   text-decoration: none;
+}
+
+::selection {
+  background: rgba(201,149,107,0.25);
+  color: var(--text-primary);
+}
+
+/* Subtle noise texture overlay on root */
+#root {
+  position: relative;
+  min-height: 100vh;
+}
+
+#root::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  opacity: 0.015;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px;
 }
