@@ -1,0 +1,35 @@
+[tools]
+node = "22"
+
+[tasks.be]
+description = "Start Django backend on port 8000"
+dir = "BE"
+run = "uv run python manage.py runserver 8000"
+
+[tasks.fe]
+description = "Start Vite dev server on port 5173"
+dir = "FE"
+run = "npm run dev"
+
+[tasks.dev]
+description = "Start both BE and FE in parallel"
+depends = ["be", "fe"]
+
+[tasks."be:migrate"]
+description = "Run Django migrations"
+dir = "BE"
+run = "uv run python manage.py migrate"
+
+[tasks."fe:install"]
+description = "Install FE dependencies"
+dir = "FE"
+run = "npm install"
+
+[tasks."be:install"]
+description = "Install BE dependencies"
+dir = "BE"
+run = "uv sync"
+
+[tasks.install]
+description = "Install all dependencies"
+depends = ["be:install", "fe:install"]
