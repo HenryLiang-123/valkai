@@ -101,6 +101,56 @@
   border: 1px solid var(--border);
   color: var(--text-secondary);
   border-bottom-left-radius: 4px;
+  white-space: normal;
+}
+
+/* Markdown inside assistant bubbles */
+.assistant p {
+  margin: 0 0 8px;
+}
+
+.assistant p:last-child {
+  margin-bottom: 0;
+}
+
+.assistant strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.assistant em {
+  font-style: italic;
+}
+
+.assistant ul,
+.assistant ol {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+
+.assistant li {
+  margin-bottom: 2px;
+}
+
+.assistant code {
+  background: var(--bg-deep);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+.assistant pre {
+  background: var(--bg-deep);
+  padding: 10px 14px;
+  border-radius: var(--radius-sm, 6px);
+  overflow-x: auto;
+  margin: 6px 0;
+}
+
+.assistant pre code {
+  background: none;
+  padding: 0;
 }
 
 .savedMemory {

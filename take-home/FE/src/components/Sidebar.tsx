@@ -25,29 +25,27 @@ export default function Sidebar({
 }: Props) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [strategy, setStrategy] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const [creating, setCreating] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchStrategies().then((list) => {
-      setStrategies(list);
-      if (list.length > 0) setStrategy(list[0].key);
-    });
+    fetchStrategies().then(setStrategies);
   }, []);
 
   useEffect(() => {
     fetchSessions().then(setSessions);
   }, [refreshKey]);
 
-  const handleNew = async () => {
-    if (!strategy || creating) return;
-    setCreating(true);
+  const handlePickStrategy = async (key: string) => {
+    if (creating) return;
+    setCreating(key);
     try {
-      const { id } = await createSession(strategy);
-      onNewSession(id, strategy);
+      const { id } = await createSession(key);
+      onNewSession(id, key);
+      setShowPicker(false);
       fetchSessions().then(setSessions);
     } finally {
-      setCreating(false);
+      setCreating(null);
     }
   };
 
@@ -55,26 +53,33 @@ export default function Sidebar({
     <aside className={styles.sidebar}>
       <div className={styles.brand}>Memory Agent</div>
       <div className={styles.newChat}>
-        <select
-          className={styles.strategySelect}
-          value={strategy}
-          onChange={(e) => setStrategy(e.target.value)}
-          disabled={creating}
-        >
-          {strategies.map((s) => (
-            <option key={s.key} value={s.key}>
-              {s.name}
-            </option>
-          ))}
-        </select>
         <button
           className={styles.newBtn}
-          onClick={handleNew}
-          disabled={creating}
+          onClick={() => setShowPicker(!showPicker)}
         >
           + New chat
         </button>
       </div>
+
+      {showPicker && (
+        <div className={styles.picker}>
+          <p className={styles.pickerLabel}>Select memory strategy</p>
+          {strategies.map((s) => (
+            <button
+              key={s.key}
+              className={styles.pickerItem}
+              onClick={() => handlePickStrategy(s.key)}
+              disabled={creating !== null}
+            >
+              <span className={styles.pickerName}>{s.name}</span>
+              <span className={styles.pickerDesc}>{s.description}</span>
+              {creating === s.key && (
+                <span className={styles.pickerLoading}>...</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className={styles.sessionList}>
         {sessions.map((s) => (

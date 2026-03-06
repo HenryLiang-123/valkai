@@ -1,20 +1,26 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 
 
 class MemoryStrategy(ABC):
-    """Base interface for conversation memory strategies."""
+    """Base interface for DB-aware conversation memory strategies.
+
+    Each strategy reads from the DB (via a message-fetching callable) and
+    returns the context that should be injected into the agent's recall.
+    """
 
     @abstractmethod
-    def get_messages(self) -> list[dict]:
-        """Return the message list to send to the agent."""
+    def recall(self, fetch_messages: callable, query: str = "") -> str:
+        """Return conversation context for the agent.
 
-    @abstractmethod
-    def add_user_message(self, content: str) -> None:
-        """Record a new user message."""
+        *fetch_messages* is a callable that returns a list of dicts with
+        keys ``role``, ``message_type``, and ``content``, ordered by time,
+        representing the full conversation history from the DB.
 
-    @abstractmethod
-    def add_assistant_messages(self, messages: list) -> None:
-        """Record the assistant's response messages (may include tool calls)."""
+        *query* is an optional search string provided by the agent to
+        focus retrieval (used by embedding-based strategies).
+        """
 
     @abstractmethod
     def describe(self) -> str:

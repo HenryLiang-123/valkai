@@ -1,90 +1,50 @@
 """Service layer for running evals and the harness comparison from the UI."""
 
 import asyncio
-import json
 import logging
+import re
 import subprocess
 import sys
 from pathlib import Path
 
+from harness.run_comparison import run_comparison, SCRIPTED_TURNS, RECALL_TURNS, check_recall
 from agent.sdk_agent import run_conversation
+from agent.memory import MEMORY_STRATEGIES
 
 logger = logging.getLogger(__name__)
 
+BE_DIR = Path(__file__).resolve().parent.parent.parent  # take-home/BE
+
 # ---------------------------------------------------------------------------
-# Harness comparison (adapted from harness/run_comparison.py for Agent SDK)
+# Harness comparison — delegates to harness/run_comparison.py
 # ---------------------------------------------------------------------------
-
-SCRIPTED_TURNS = [
-    "My name is Henry and I'm a backend engineer.",
-    "I prefer TypeScript over Python for APIs.",
-    "What's the weather like today?",
-    "Tell me a joke.",
-    "Can you recommend a book?",
-    "What's 2 + 2?",
-    "What's my name and what language do I prefer?",
-    "What do I do for work?",
-]
-
-RECALL_TURNS = {6: ["Henry", "TypeScript"], 7: ["backend engineer"]}
-
-
-def _check_recall(response: str, expected: list[str]) -> tuple[bool, list[str]]:
-    lower = response.lower()
-    found = [kw for kw in expected if kw.lower() in lower]
-    return len(found) == len(expected), found
-
-
-async def _run_harness_strategy(strategy_name: str) -> dict:
-    result = await run_conversation(strategy_name, SCRIPTED_TURNS)
-
-    responses = [t.response for t in result.turns]
-    tool_calls = []
-    for i, t in enumerate(result.turns):
-        for tc in t.tool_calls:
-            tool_calls.append({"turn": i + 1, "tool": tc["tool"], "input": tc["input"]})
-
-    t7_pass, t7_found = _check_recall(responses[6], RECALL_TURNS[6])
-    t8_pass, t8_found = _check_recall(responses[7], RECALL_TURNS[7])
-
-    return {
-        "strategy": strategy_name,
-        "recall": {
-            "turn_7": {"pass": t7_pass, "expected": RECALL_TURNS[6], "found": t7_found},
-            "turn_8": {"pass": t8_pass, "expected": RECALL_TURNS[7], "found": t8_found},
-        },
-        "responses": [
-            {"turn": i + 1, "user": SCRIPTED_TURNS[i], "assistant": r}
-            for i, r in enumerate(responses)
-        ],
-        "tool_calls": tool_calls,
-    }
 
 
 def run_harness(strategies: list[str] | None = None) -> dict:
     """Run the harness comparison across strategies. Returns structured results."""
-    from agent.memory import MEMORY_STRATEGIES
+    raw = run_comparison(strategies_to_run=strategies, skip_retrieval=False)
 
-    if strategies is None:
-        strategies = [s for s in MEMORY_STRATEGIES if s != "retrieval"]
+    results = []
+    for r in raw:
+        results.append({
+            "strategy": r["name"],
+            "description": r["description"],
+            "recall": {
+                "turn_7": r["recall_turn_7"],
+                "turn_8": r["recall_turn_8"],
+            },
+            "responses": [
+                {"turn": i + 1, "user": SCRIPTED_TURNS[i], "assistant": resp}
+                for i, resp in enumerate(r["responses"])
+            ],
+        })
 
-    async def _run():
-        results = []
-        for name in strategies:
-            logger.info("Harness: running strategy %s", name)
-            r = await _run_harness_strategy(name)
-            results.append(r)
-        return results
-
-    results = asyncio.run(_run())
-    return {"type": "harness", "strategies": strategies, "results": results}
+    return {"type": "harness", "results": results}
 
 
 # ---------------------------------------------------------------------------
 # Pytest runner
 # ---------------------------------------------------------------------------
-
-BE_DIR = Path(__file__).resolve().parent.parent.parent  # take-home/BE
 
 
 def run_tests(test_path: str = "evals/") -> dict:
@@ -95,7 +55,6 @@ def run_tests(test_path: str = "evals/") -> dict:
         "--tb=short",
         "-v",
         "--no-header",
-        "-q",
     ]
     logger.info("Running tests: %s", " ".join(cmd))
 
@@ -113,14 +72,11 @@ def run_tests(test_path: str = "evals/") -> dict:
 
     for line in lines:
         line_stripped = line.strip()
-        if "::" in line_stripped and (" PASSED" in line_stripped or " FAILED" in line_stripped or " ERROR" in line_stripped):
-            parts = line_stripped.rsplit(" ", 1)
-            test_id = parts[0].strip()
-            status = parts[1].strip() if len(parts) > 1 else "UNKNOWN"
-            tests.append({"test": test_id, "status": status})
-        elif "passed" in line_stripped or "failed" in line_stripped or "error" in line_stripped:
-            if not line_stripped.startswith("="):
-                summary_line = line_stripped
+        m = re.match(r'^(.+::.*?)\s+(PASSED|FAILED|ERROR)\s*', line_stripped)
+        if m:
+            tests.append({"test": m.group(1).strip(), "status": m.group(2)})
+        elif line_stripped.startswith("=") and ("passed" in line_stripped or "failed" in line_stripped or "error" in line_stripped):
+            summary_line = line_stripped.strip("= ")
 
     passed = sum(1 for t in tests if t["status"] == "PASSED")
     failed = sum(1 for t in tests if t["status"] == "FAILED")
@@ -138,3 +94,65 @@ def run_tests(test_path: str = "evals/") -> dict:
         "stdout": proc.stdout,
         "stderr": proc.stderr if proc.returncode != 0 else "",
     }
+
+
+# ---------------------------------------------------------------------------
+# Agent SDK comparison — same scripted turns but via the SDK agent with tools
+# ---------------------------------------------------------------------------
+
+
+def run_agent_sdk_harness(strategies: list[str] | None = None) -> dict:
+    """Run the scripted conversation through the Agent SDK agent with memory tools.
+
+    Returns structured results with tool call info and recall checks.
+    """
+    if strategies is None:
+        strategies = list(MEMORY_STRATEGIES.keys())
+
+    async def _run_all():
+        results = []
+        for name in strategies:
+            logger.info("[SDK harness] Starting strategy=%s", name)
+            conv = await run_conversation(name, SCRIPTED_TURNS)
+            # Extract responses and tool calls per turn
+            turns = []
+            for i, turn in enumerate(conv.turns):
+                logger.info("[SDK harness] strategy=%s turn=%d user=%r", name, i + 1, turn.user_message)
+                if turn.tool_calls:
+                    logger.info("[SDK harness] strategy=%s turn=%d tool_calls=%s", name, i + 1, turn.tool_calls)
+                logger.info("[SDK harness] strategy=%s turn=%d response=%r", name, i + 1, turn.response[:300])
+                turns.append({
+                    "turn": i + 1,
+                    "user": turn.user_message,
+                    "assistant": turn.response,
+                    "tool_calls": turn.tool_calls,
+                })
+
+            # Check recall on turns 7 and 8 (indices 6 and 7)
+            t7_pass, t7_found = check_recall(conv.turns[6].response, RECALL_TURNS[6])
+            t8_pass, t8_found = check_recall(conv.turns[7].response, RECALL_TURNS[7])
+            logger.info(
+                "[SDK harness] strategy=%s recall: turn_7=%s turn_8=%s",
+                name,
+                "PASS" if t7_pass else f"FAIL (found: {t7_found})",
+                "PASS" if t8_pass else f"FAIL (found: {t8_found})",
+            )
+
+            results.append({
+                "strategy": name,
+                "recall": {
+                    "turn_7": {"passed": t7_pass, "expected": RECALL_TURNS[6], "found": t7_found},
+                    "turn_8": {"passed": t8_pass, "expected": RECALL_TURNS[7], "found": t8_found},
+                },
+                "turns": turns,
+            })
+            logger.info("[SDK harness] Finished strategy=%s", name)
+        return results
+
+    loop = asyncio.new_event_loop()
+    try:
+        results = loop.run_until_complete(_run_all())
+    finally:
+        loop.close()
+
+    return {"type": "agent_sdk", "results": results}

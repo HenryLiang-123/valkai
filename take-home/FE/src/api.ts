@@ -73,21 +73,20 @@ export async function sendMessage(
 // ---------------------------------------------------------------------------
 
 export interface HarnessRecall {
-  pass: boolean;
+  passed: boolean;
   expected: string[];
   found: string[];
 }
 
 export interface HarnessStrategyResult {
   strategy: string;
+  description: string;
   recall: { turn_7: HarnessRecall; turn_8: HarnessRecall };
   responses: { turn: number; user: string; assistant: string }[];
-  tool_calls: { turn: number; tool: string; input: Record<string, string> }[];
 }
 
 export interface HarnessResult {
   type: "harness";
-  strategies: string[];
   results: HarnessStrategyResult[];
 }
 
@@ -107,6 +106,40 @@ export interface TestsResult {
   summary: string;
   stdout: string;
   stderr: string;
+}
+
+export interface AgentSdkToolCall {
+  tool: string;
+  input: Record<string, string>;
+}
+
+export interface AgentSdkTurn {
+  turn: number;
+  user: string;
+  assistant: string;
+  tool_calls: AgentSdkToolCall[];
+}
+
+export interface AgentSdkStrategyResult {
+  strategy: string;
+  recall: { turn_7: HarnessRecall; turn_8: HarnessRecall };
+  turns: AgentSdkTurn[];
+}
+
+export interface AgentSdkResult {
+  type: "agent_sdk";
+  results: AgentSdkStrategyResult[];
+}
+
+export async function runAgentSdk(
+  strategies?: string[]
+): Promise<AgentSdkResult> {
+  const res = await fetch(`${API_BASE}/evals/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "agent_sdk", strategies }),
+  });
+  return res.json();
 }
 
 export async function runHarness(

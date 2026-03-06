@@ -3,7 +3,7 @@ import logging
 from django.shortcuts import get_object_or_404
 
 from agent.memory import MEMORY_STRATEGIES
-from agent.sdk_agent import _StrategyAdapter
+from agent.memory.base import MemoryStrategy
 
 from chat.models import ChatSession
 from chat.serializers import serialize_message
@@ -11,17 +11,24 @@ from chat.services.db import db_retry
 
 logger = logging.getLogger(__name__)
 
-# In-memory backend store keyed by session UUID (memory strategies are stateful
-# Python objects that can't be serialised to DB, so we keep them in process).
-_backends: dict[str, _StrategyAdapter] = {}
+
+def get_memory_strategy(session: ChatSession) -> MemoryStrategy:
+    strategy_cls = MEMORY_STRATEGIES[session.strategy]
+    return strategy_cls()
 
 
-def get_memory_backend(session: ChatSession) -> _StrategyAdapter:
-    key = str(session.id)
-    if key not in _backends:
-        strategy_cls = MEMORY_STRATEGIES[session.strategy]
-        _backends[key] = _StrategyAdapter(strategy_cls())
-    return _backends[key]
+def get_fetch_messages(session: ChatSession):
+    """Return a callable that fetches all messages for this session from the DB."""
+
+    def fetch() -> list[dict]:
+        rows = db_retry(
+            lambda: list(session.messages.all().values(
+                "role", "message_type", "content"
+            ))
+        )
+        return rows
+
+    return fetch
 
 
 def get_session(session_id) -> ChatSession:

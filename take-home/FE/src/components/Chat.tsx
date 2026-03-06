@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { fetchMessages, sendMessage, type ChatEvent } from "../api";
 import styles from "./Chat.module.css";
 
@@ -78,6 +79,8 @@ export default function Chat({ sessionId, strategy }: Props) {
           >
             {msg.type === "tool_use" ? (
               <span className={styles.memoryLabel}>Tool: {msg.tool_name}</span>
+            ) : msg.role === "assistant" ? (
+              <ReactMarkdown>{msg.text}</ReactMarkdown>
             ) : (
               msg.text
             )}

@@ -1,12 +1,13 @@
 """Agent loop using Claude Agent SDK with tool-based memory strategies.
 
-Each memory strategy is exposed as a pair of tools (save_memory / recall_memory)
-that the agent autonomously decides when to call, rather than transparently
-managing conversation history behind the scenes.
+The recall_memory tool is exposed to the agent so it can autonomously decide
+when to retrieve conversation context. Each memory strategy reads directly
+from the DB via a message-fetching callable.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -28,90 +29,58 @@ from agent.memory.base import MemoryStrategy
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Adapter — wraps existing MemoryStrategy classes for the save/recall tool API
-# ---------------------------------------------------------------------------
-
-ACK = "Acknowledged."
-
-
-class _StrategyAdapter:
-    """Thin adapter that translates save/recall tool calls into the existing
-    MemoryStrategy message-list interface.
-
-    save(content)  -> feeds content as a user message + a synthetic assistant ack,
-                      which may trigger the strategy's internal compression.
-    recall(query)  -> feeds the query as a user message, reads back whatever the
-                      strategy injects (summaries, windowed history, etc.), then
-                      removes the temporary query message.
-    """
-
-    def __init__(self, strategy: MemoryStrategy):
-        self._strategy = strategy
-
-    def save(self, content: str) -> str:
-        self._strategy.add_user_message(content)
-        # Simulate an assistant acknowledgement so the strategy's turn counter
-        # advances and compression triggers at the right cadence.
-        msgs = self._strategy.get_messages()
-        msgs.append({"role": "assistant", "content": ACK})
-        self._strategy.add_assistant_messages(msgs)
-        return f"Saved to memory."
-
-    def recall(self, query: str) -> str:
-        # Temporarily inject the query so retrieval-based strategies can embed it
-        self._strategy.add_user_message(query)
-        msgs = self._strategy.get_messages()
-        # Remove the temporary query message we just added
-        if hasattr(self._strategy, "_messages") and self._strategy._messages:
-            self._strategy._messages.pop()
-        # Pull out the strategy's injected context (system messages, recent history)
-        parts = []
-        for m in msgs:
-            role = m["role"] if isinstance(m, dict) else getattr(m, "type", "")
-            content = m["content"] if isinstance(m, dict) else getattr(m, "content", "")
-            if role == "system":
-                parts.append(content)
-            elif role == "user" and content != query:
-                parts.append(f"- {content}")
-        return "\n\n".join(parts) if parts else "No memories stored yet."
-
-
-def _make_backend(strategy_name: str) -> _StrategyAdapter:
-    strategy_cls = MEMORY_STRATEGIES[strategy_name]
-    return _StrategyAdapter(strategy_cls())
-
 
 # ---------------------------------------------------------------------------
 # Tool creation
 # ---------------------------------------------------------------------------
 
 
-def create_memory_tools(strategy_name: str):
-    """Create save_memory and recall_memory tools backed by the given strategy."""
-    backend = _make_backend(strategy_name)
+def create_recall_tool(strategy: MemoryStrategy, fetch_messages: Callable[[], list[dict]]):
+    """Create a recall_memory tool backed by the given strategy and DB fetcher.
 
-    @tool(
-        "save_memory",
-        "Save an important fact, preference, or detail from the conversation to memory. "
-        "Call this whenever the user shares personal information, preferences, or key facts.",
-        {"content": str},
-    )
-    async def save_memory(args: dict[str, Any]) -> dict[str, Any]:
-        result = backend.save(args["content"])
-        return {"content": [{"type": "text", "text": result}]}
+    For retrieval-based strategies the tool accepts a ``query`` input so
+    the agent can specify what to search for.  For simpler strategies
+    (buffer, window, summary) no input is needed.
+    """
+    from agent.memory.retrieval import RetrievalSummaryMemory
 
-    @tool(
-        "recall_memory",
-        "Retrieve previously stored information from memory. "
-        "Call this when you need to answer a question that may depend on earlier context.",
-        {"query": str},
-    )
-    async def recall_memory(args: dict[str, Any]) -> dict[str, Any]:
-        result = backend.recall(args["query"])
-        return {"content": [{"type": "text", "text": result}]}
+    if isinstance(strategy, RetrievalSummaryMemory):
+        @tool(
+            "recall_memory",
+            "Search conversation memory for relevant context. "
+            "Provide a query describing what information you need.",
+            {"query": {"type": "string", "description": "What to search for in memory"}},
+        )
+        async def recall_memory_retrieval(args: dict[str, Any]) -> dict[str, Any]:
+            query = args.get("query", "")
+            logger.info("recall_memory tool invoked (strategy=%s, query=%r)", type(strategy).__name__, query)
+            try:
+                result = await asyncio.to_thread(strategy.recall, fetch_messages, query)
+                logger.info("recall_memory returned %d chars: %s", len(result), result[:500])
+            except Exception as e:
+                logger.exception(f"recall_memory failed {e}")
+                result = "Error retrieving memories."
+            return {"content": [{"type": "text", "text": result}]}
 
-    return save_memory, recall_memory, backend
+        return recall_memory_retrieval
+    else:
+        @tool(
+            "recall_memory",
+            "Retrieve the conversation history from memory. "
+            "Call this when you need to answer a question that may depend on earlier context.",
+            {},
+        )
+        async def recall_memory(_args: dict[str, Any]) -> dict[str, Any]:
+            logger.info("recall_memory tool invoked (strategy=%s)", type(strategy).__name__)
+            try:
+                result = await asyncio.to_thread(strategy.recall, fetch_messages)
+                logger.info("recall_memory returned %d chars: %s", len(result), result[:500])
+            except Exception as e:
+                logger.exception(f"recall_memory failed {e}")
+                result = "Error retrieving memories."
+            return {"content": [{"type": "text", "text": result}]}
+
+        return recall_memory
 
 
 # ---------------------------------------------------------------------------
@@ -119,39 +88,9 @@ def create_memory_tools(strategy_name: str):
 # ---------------------------------------------------------------------------
 
 
-def _create_tools_for_backend(
-    backend: _StrategyAdapter,
-    session_id: str,
-):
-    """Create save/recall tools wired to an existing backend, with logging."""
-
-    @tool(
-        "save_memory",
-        "Save an important fact, preference, or detail from the conversation to memory. "
-        "Call this whenever the user shares personal information, preferences, or key facts.",
-        {"content": str},
-    )
-    async def save_memory(args: dict[str, Any]) -> dict[str, Any]:
-        logger.info("Tool call: save_memory session=%s content=%r", session_id, args["content"])
-        result = backend.save(args["content"])
-        return {"content": [{"type": "text", "text": result}]}
-
-    @tool(
-        "recall_memory",
-        "Retrieve previously stored information from memory. "
-        "Call this when you need to answer a question that may depend on earlier context.",
-        {"query": str},
-    )
-    async def recall_memory(args: dict[str, Any]) -> dict[str, Any]:
-        logger.info("Tool call: recall_memory session=%s query=%r", session_id, args["query"])
-        result = backend.recall(args["query"])
-        return {"content": [{"type": "text", "text": result}]}
-
-    return save_memory, recall_memory
-
-
 async def send_message(
-    backend: _StrategyAdapter,
+    strategy: MemoryStrategy,
+    fetch_messages: Callable[[], list[dict]],
     user_message: str,
     session_id: str,
     on_event: Callable[[dict[str, Any]], Any] | None = None,
@@ -173,28 +112,31 @@ async def send_message(
             if hasattr(result, "__await__"):
                 await result
 
-    save_tool, recall_tool = _create_tools_for_backend(backend, session_id)
+    recall_tool = create_recall_tool(strategy, fetch_messages)
 
     server = create_sdk_mcp_server(
         name="memory",
         version="1.0.0",
-        tools=[save_tool, recall_tool],
+        tools=[recall_tool],
     )
 
     options = ClaudeAgentOptions(
         system_prompt=SYSTEM_PROMPT,
         mcp_servers={"memory": server},
-        allowed_tools=["mcp__memory__save_memory", "mcp__memory__recall_memory"],
+        allowed_tools=["mcp__memory__recall_memory"],
         permission_mode="bypassPermissions",
         model="claude-haiku-4-5-20251001",
         max_turns=10,
     )
 
+    logger.info("send_message: starting SDK client for session=%s", session_id)
     async with ClaudeSDKClient(options=options) as client:
         await client.query(user_message, session_id=session_id)
+        logger.info("send_message: query sent, awaiting response")
 
         response_text = ""
         async for message in client.receive_response():
+            logger.info("send_message: received message type=%s", type(message).__name__)
             if isinstance(message, AssistantMessage):
                 for block in message.content:
                     if isinstance(block, TextBlock):
@@ -212,10 +154,8 @@ async def send_message(
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = (
-    "You are a helpful assistant with memory tools. "
-    "Use save_memory to store important facts, preferences, or details the user shares. "
-    "Use recall_memory to retrieve previously stored information when you need it to answer a question. "
-    "Always save noteworthy facts immediately when the user shares them. "
+    "You are a helpful assistant with a memory tool. "
+    "Use recall_memory to retrieve the conversation history when you need it to answer a question. "
     "Always recall memories before answering questions that might depend on earlier context."
 )
 
@@ -240,21 +180,33 @@ async def run_conversation(
 ) -> ConversationResult:
     """Run a multi-turn conversation using the Claude Agent SDK with memory tools.
 
-    Each user message is sent as a turn. The agent can call save_memory / recall_memory
-    tools between turns. Returns structured results with tool call logs.
+    Each user message is sent as a turn. The agent can call recall_memory
+    between turns. Returns structured results with tool call logs.
+
+    Note: this runner uses an in-memory message list (not the DB) for the
+    fetch_messages callable, suitable for evals and CLI usage.
     """
-    save_tool, recall_tool, _backend = create_memory_tools(strategy_name)
+    strategy_cls = MEMORY_STRATEGIES[strategy_name]
+    strategy = strategy_cls()
+
+    # In-memory message store for non-Django contexts (evals, CLI)
+    conversation_log: list[dict] = []
+
+    def fetch_messages() -> list[dict]:
+        return list(conversation_log)
+
+    recall_tool = create_recall_tool(strategy, fetch_messages)
 
     server = create_sdk_mcp_server(
         name="memory",
         version="1.0.0",
-        tools=[save_tool, recall_tool],
+        tools=[recall_tool],
     )
 
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
         mcp_servers={"memory": server},
-        allowed_tools=["mcp__memory__save_memory", "mcp__memory__recall_memory"],
+        allowed_tools=["mcp__memory__recall_memory"],
         permission_mode="bypassPermissions",
         model="claude-haiku-4-5-20251001",
         max_turns=10,
@@ -265,6 +217,12 @@ async def run_conversation(
     async with ClaudeSDKClient(options=options) as client:
         for user_msg in messages:
             turn = TurnResult(user_message=user_msg, response="")
+
+            conversation_log.append({
+                "role": "user",
+                "message_type": "chat_message",
+                "content": user_msg,
+            })
 
             await client.query(user_msg)
 
@@ -280,6 +238,12 @@ async def run_conversation(
                                     "input": block.input,
                                 }
                             )
+
+            conversation_log.append({
+                "role": "assistant",
+                "message_type": "chat_message",
+                "content": turn.response,
+            })
 
             result.turns.append(turn)
 

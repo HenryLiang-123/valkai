@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 
 from chat.services.session import list_strategies, handle_list_sessions, handle_create_session, handle_session_messages
 from chat.services.message import handle_send_message
-from chat.services.evals import run_harness, run_tests
+from chat.services.evals import run_harness, run_tests, run_agent_sdk_harness
 
 load_dotenv()
 
@@ -66,9 +66,13 @@ def run_evals(request):
         strategies = body.get("strategies")
         result = run_harness(strategies)
         return JsonResponse(result)
+    elif eval_type == "agent_sdk":
+        strategies = body.get("strategies")
+        result = run_agent_sdk_harness(strategies)
+        return JsonResponse(result)
     elif eval_type == "tests":
         test_path = body.get("test_path", "evals/")
         result = run_tests(test_path)
         return JsonResponse(result)
     else:
-        return JsonResponse({"error": f"Invalid eval type: {eval_type}. Use 'harness' or 'tests'."}, status=400)
+        return JsonResponse({"error": f"Invalid eval type: {eval_type}. Use 'harness', 'agent_sdk', or 'tests'."}, status=400)

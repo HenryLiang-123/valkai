@@ -18,20 +18,6 @@ load_dotenv()
 
 
 @pytest.mark.asyncio
-async def test_agent_calls_save_memory_on_facts():
-    """Agent should call save_memory when the user shares personal facts."""
-    result = await run_conversation(
-        "buffer",
-        ["My name is Henry and I'm a backend engineer who loves Rust."],
-    )
-    print_tool_calls(result)
-
-    turn = result.turns[0]
-    save_calls = [tc for tc in turn.tool_calls if "save_memory" in tc["tool"]]
-    assert len(save_calls) >= 1, "Agent should call save_memory when user shares facts"
-
-
-@pytest.mark.asyncio
 async def test_agent_calls_recall_memory_on_questions():
     """Agent should call recall_memory when asked about earlier context."""
     result = await run_conversation(
@@ -110,6 +96,23 @@ async def test_summary_recalls_gist():
     assert "Henry" in result.turns[-1].response
 
 
+@pytest.mark.asyncio
+async def test_retrieval_recalls_facts():
+    """Retrieval strategy should recall facts via embedding similarity."""
+    result = await run_conversation(
+        "retrieval",
+        [
+            "My name is Henry and I prefer TypeScript.",
+            "What's the weather?",
+            "Tell me a joke.",
+            "What's my name?",
+        ],
+    )
+    print_tool_calls(result)
+
+    assert "Henry" in result.turns[-1].response
+
+
 # ---------------------------------------------------------------------------
 # Custom system prompt test
 # ---------------------------------------------------------------------------
@@ -120,8 +123,7 @@ async def test_custom_system_prompt():
     """Agent should respect a custom system prompt while still using tools."""
     custom_prompt = (
         "You are a pirate assistant. Always respond in pirate speak. "
-        "You have memory tools. Use save_memory to store facts and "
-        "recall_memory to retrieve them."
+        "You have a memory tool. Use recall_memory to retrieve conversation history."
     )
     result = await run_conversation(
         "buffer",

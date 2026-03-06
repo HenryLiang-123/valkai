@@ -4,12 +4,13 @@ node = "22"
 [tasks.be]
 description = "Start Django backend on port 8000"
 dir = "BE"
-depends = ["be:migrate"]
+depends = ["be:install", "be:migrate"]
 run = "uv run python manage.py runserver 8000"
 
 [tasks.fe]
 description = "Start Vite dev server on port 5173"
 dir = "FE"
+depends = ["fe:install"]
 run = "npm run dev"
 
 [tasks.dev]

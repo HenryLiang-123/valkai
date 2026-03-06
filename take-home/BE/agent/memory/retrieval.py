@@ -1,10 +1,19 @@
-import numpy as np
-from langchain.chat_models import init_chat_model
-from sentence_transformers import SentenceTransformer
+from __future__ import annotations
 
 from agent.memory.base import MemoryStrategy
 
 SUMMARIZE_EVERY = 4
+_EMBEDDER = None
+
+
+def get_embedder():
+    global _EMBEDDER
+    if _EMBEDDER is None:
+        from sentence_transformers import SentenceTransformer
+        _EMBEDDER = SentenceTransformer("all-MiniLM-L6-v2")
+    return _EMBEDDER
+
+
 SUMMARY_PROMPT = (
     "Condense the following conversation chunk into a concise summary that preserves "
     "all important facts, user preferences, names, and decisions. "
@@ -13,113 +22,92 @@ SUMMARY_PROMPT = (
 )
 
 
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+def _cosine_similarity(a, b):
     """Cosine similarity between vector *a* and each row of matrix *b*."""
+    import numpy as np
     a_norm = a / (np.linalg.norm(a) + 1e-10)
     b_norm = b / (np.linalg.norm(b, axis=1, keepdims=True) + 1e-10)
     return b_norm @ a_norm
 
 
 class RetrievalSummaryMemory(MemoryStrategy):
-    """Accumulates summaries over time and retrieves the most relevant ones.
+    """Chunks the conversation into blocks, summarises each, and retrieves
+    the most relevant summaries via embedding similarity.
 
-    Every *n* user turns the recent conversation chunk is compressed into a
-    summary and stored (not overwritten). On each call to ``get_messages()``,
-    the latest user message is embedded alongside all stored summaries and only
-    the top-k most similar summaries are injected into the context.
-
-    This allows the agent to recall old facts that happen to match the current
-    question, without sending the entire history.
+    On recall the full DB history is chunked, each chunk is summarised,
+    and the top-k summaries most similar to the latest user message are
+    returned alongside the most recent messages.
     """
 
     def __init__(
         self,
         model_str: str = "anthropic:claude-haiku-4-5-20251001",
-        embed_model: str = "all-MiniLM-L6-v2",
-        summarize_every: int = SUMMARIZE_EVERY,
+        chunk_size: int = SUMMARIZE_EVERY,
         recent_to_keep: int = 4,
         top_k: int = 3,
     ):
+        from langchain.chat_models import init_chat_model
         self._llm = init_chat_model(model_str)
-        self._embedder = SentenceTransformer(embed_model)
-        self._summarize_every = summarize_every
+        self._embedder = get_embedder()
+        self._chunk_size = chunk_size
         self._recent_to_keep = recent_to_keep
         self._top_k = top_k
 
-        self._messages: list[dict] = []
-        self._summaries: list[str] = []
-        self._summary_embeddings: list[np.ndarray] = []
-        self._turns_since_summary = 0
+    def recall(self, fetch_messages: callable, query: str = "") -> str:
+        import numpy as np
 
-    # --- MemoryStrategy interface ---
+        messages = fetch_messages()
+        chat_messages = [m for m in messages if m["message_type"] == "chat_message"]
+        if not chat_messages:
+            return "No conversation history yet."
 
-    def get_messages(self) -> list[dict]:
-        msgs: list[dict] = []
-        if self._summaries:
-            relevant = self._retrieve_relevant()
-            if relevant:
-                context = "\n\n".join(f"- {s}" for s in relevant)
-                msgs.append(
-                    {
-                        "role": "system",
-                        "content": (
-                            "Relevant context from earlier conversation:\n" + context
-                        ),
-                    }
-                )
-        msgs.extend(self._messages[-self._recent_to_keep :])
-        return msgs
+        # If conversation is short enough, return everything
+        if len(chat_messages) <= self._recent_to_keep:
+            lines = [f"{m['role']}: {m['content']}" for m in chat_messages]
+            return "\n".join(lines)
 
-    def add_user_message(self, content: str) -> None:
-        self._messages.append({"role": "user", "content": content})
-        self._turns_since_summary += 1
+        older = chat_messages[: -self._recent_to_keep]
+        recent = chat_messages[-self._recent_to_keep :]
 
-    def add_assistant_messages(self, messages: list) -> None:
-        self._messages = list(messages)
-        if self._turns_since_summary >= self._summarize_every:
-            self._compress()
+        # Chunk older messages and summarise each chunk
+        chunks = [
+            older[i : i + self._chunk_size]
+            for i in range(0, len(older), self._chunk_size)
+        ]
+        summaries = []
+        for chunk in chunks:
+            text = "\n".join(f"{m['role']}: {m['content']}" for m in chunk)
+            prompt = SUMMARY_PROMPT.format(conversation=text)
+            result = self._llm.invoke(prompt)
+            summaries.append(result.content)
+
+        if not summaries:
+            lines = [f"{m['role']}: {m['content']}" for m in recent]
+            return "\n".join(lines)
+
+        # Use agent-provided query, fall back to last user message
+        search_query = query or next(
+            (m["content"] for m in reversed(chat_messages) if m["role"] == "user"),
+            "",
+        )
+        if search_query and len(summaries) > 1:
+            query_emb = self._embedder.encode(search_query)
+            summary_embs = np.stack([self._embedder.encode(s) for s in summaries])
+            scores = _cosine_similarity(query_emb, summary_embs)
+            k = min(self._top_k, len(summaries))
+            top_indices = np.argsort(scores)[-k:][::-1]
+            relevant = [summaries[i] for i in top_indices]
+        else:
+            relevant = summaries[: self._top_k]
+
+        parts = ["Relevant context from earlier conversation:"]
+        parts.extend(f"- {s}" for s in relevant)
+        parts.append("")
+        parts.extend(f"{m['role']}: {m['content']}" for m in recent)
+        return "\n".join(parts)
 
     def describe(self) -> str:
         return (
-            f"Retrieval Summary (compress every {self._summarize_every} turns, "
+            f"Retrieval Summary (chunk size {self._chunk_size}, "
             f"top-{self._top_k} retrieval)"
         )
-
-    # --- Internal helpers ---
-
-    def _compress(self) -> None:
-        """Summarise recent messages and store the summary with its embedding."""
-        conversation_text = "\n".join(
-            f"{m['role'] if isinstance(m, dict) else m.type}: "
-            f"{m['content'] if isinstance(m, dict) else m.content}"
-            for m in self._messages
-        )
-        prompt = SUMMARY_PROMPT.format(conversation=conversation_text)
-        result = self._llm.invoke(prompt)
-        summary = result.content
-
-        self._summaries.append(summary)
-        embedding = self._embedder.encode(summary)
-        self._summary_embeddings.append(embedding)
-        self._turns_since_summary = 0
-
-    def _retrieve_relevant(self) -> list[str]:
-        """Return the top-k summaries most similar to the latest user message."""
-        last_user_msg = None
-        for m in reversed(self._messages):
-            content = m["content"] if isinstance(m, dict) else m.content
-            role = m["role"] if isinstance(m, dict) else m.type
-            if role in ("user", "human"):
-                last_user_msg = content
-                break
-
-        if not last_user_msg or not self._summary_embeddings:
-            return list(self._summaries[: self._top_k])
-
-        query_embedding = self._embedder.encode(last_user_msg)
-        summary_matrix = np.stack(self._summary_embeddings)
-        scores = _cosine_similarity(query_embedding, summary_matrix)
-
-        k = min(self._top_k, len(self._summaries))
-        top_indices = np.argsort(scores)[-k:][::-1]
-        return [self._summaries[i] for i in top_indices]

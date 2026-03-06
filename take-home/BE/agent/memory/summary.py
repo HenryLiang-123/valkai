@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from langchain.chat_models import init_chat_model
 
 from agent.memory.base import MemoryStrategy
@@ -14,9 +16,8 @@ SUMMARY_PROMPT = (
 class SummaryMemory(MemoryStrategy):
     """Periodically summarises older messages to save tokens.
 
-    After every *n* user turns the full history is compressed into a summary
-    that is prepended as a system message. The most recent messages are kept
-    verbatim so the agent still has immediate context.
+    On recall, if the conversation is long enough, older messages are compressed
+    into a summary (via LLM) and prepended before the most recent messages.
 
     Trade-off: reduces token usage substantially, but the summary is lossy —
     specific details may be paraphrased or dropped.
@@ -31,42 +32,32 @@ class SummaryMemory(MemoryStrategy):
         self._model = init_chat_model(model_str)
         self._summarize_every = summarize_every
         self._recent_to_keep = recent_to_keep
-        self._messages: list[dict] = []
-        self._summary: str | None = None
-        self._turns_since_summary = 0
 
-    def get_messages(self) -> list[dict]:
-        msgs: list[dict] = []
-        if self._summary:
-            msgs.append(
-                {
-                    "role": "system",
-                    "content": f"Summary of earlier conversation:\n{self._summary}",
-                }
-            )
-        msgs.extend(self._messages[-self._recent_to_keep :])
-        return msgs
+    def recall(self, fetch_messages: callable, query: str = "") -> str:
+        messages = fetch_messages()
+        chat_messages = [m for m in messages if m["message_type"] == "chat_message"]
+        if not chat_messages:
+            return "No conversation history yet."
 
-    def add_user_message(self, content: str) -> None:
-        self._messages.append({"role": "user", "content": content})
-        self._turns_since_summary += 1
+        # If conversation is short enough, return everything
+        if len(chat_messages) <= self._recent_to_keep:
+            lines = [f"{m['role']}: {m['content']}" for m in chat_messages]
+            return "\n".join(lines)
 
-    def add_assistant_messages(self, messages: list) -> None:
-        self._messages = list(messages)
-        if self._turns_since_summary >= self._summarize_every:
-            self._compress()
+        # Summarize older messages, keep recent ones verbatim
+        older = chat_messages[: -self._recent_to_keep]
+        recent = chat_messages[-self._recent_to_keep :]
 
-    def _compress(self) -> None:
-        """Use the LLM to summarise the conversation so far."""
         conversation_text = "\n".join(
-            f"{m['role'] if isinstance(m, dict) else m.type}: "
-            f"{m['content'] if isinstance(m, dict) else m.content}"
-            for m in self._messages
+            f"{m['role']}: {m['content']}" for m in older
         )
         prompt = SUMMARY_PROMPT.format(conversation=conversation_text)
         result = self._model.invoke(prompt)
-        self._summary = result.content
-        self._turns_since_summary = 0
+        summary = result.content
+
+        parts = [f"Summary of earlier conversation:\n{summary}", ""]
+        parts.extend(f"{m['role']}: {m['content']}" for m in recent)
+        return "\n".join(parts)
 
     def describe(self) -> str:
-        return f"Summary (compress every {self._summarize_every} turns, keep last {self._recent_to_keep} msgs)"
+        return f"Summary (compress older, keep last {self._recent_to_keep} msgs)"
